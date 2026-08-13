@@ -52,6 +52,18 @@ class ReceiptPreview extends StatelessWidget {
                 height: 1.4,
               ),
             ),
+            if (dashProvider.gstin.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                'GSTIN: ${dashProvider.gstin}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.black87,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             _buildDivider(),
             const SizedBox(height: 8),
@@ -179,6 +191,10 @@ class ReceiptPreview extends StatelessWidget {
             _buildSummaryRow('Gross Total:', '₹${bill.totalAmount.toStringAsFixed(2)}'),
             if (bill.discount > 0)
               _buildSummaryRow('Discount:', '-₹${bill.discount.toStringAsFixed(2)}', isDiscount: true),
+            if (bill.gstAmount > 0) ...[
+              _buildSummaryRow('Taxable Amt:', '₹${(bill.totalAmount - bill.discount).toStringAsFixed(2)}'),
+              _buildSummaryRow('GST (${bill.gstPercentage.toStringAsFixed(1)}%):', '+₹${bill.gstAmount.toStringAsFixed(2)}'),
+            ],
             const SizedBox(height: 4),
             _buildSummaryRow(
               'NET AMOUNT:',

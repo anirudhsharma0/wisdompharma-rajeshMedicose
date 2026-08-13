@@ -10,6 +10,7 @@ class PosProvider extends ChangeNotifier {
   String _customerName = '';
   String _customerPhone = '';
   double _discount = 0.0;
+  double _gstPercentage = 0.0; // GST % (e.g., 0, 5, 12, 18)
   String _paymentMode = 'Credit';
 
   // Search autocomplete state
@@ -24,6 +25,7 @@ class PosProvider extends ChangeNotifier {
   String get customerName => _customerName;
   String get customerPhone => _customerPhone;
   double get discount => _discount;
+  double get gstPercentage => _gstPercentage;
   String get paymentMode => _paymentMode;
   List<MedicineMasterModel> get searchResults => _searchResults;
   bool get isSearching => _isSearching;
@@ -32,8 +34,16 @@ class PosProvider extends ChangeNotifier {
     return _cartItems.fold(0.0, (sum, item) => sum + item.totalPrice);
   }
 
-  double get netAmount {
+  double get taxableAmount {
     return (totalAmount - _discount).clamp(0.0, 9999999.0);
+  }
+
+  double get gstAmount {
+    return (taxableAmount * _gstPercentage / 100.0);
+  }
+
+  double get netAmount {
+    return (taxableAmount + gstAmount).clamp(0.0, 9999999.0);
   }
 
   // Setters & Cart Actions
@@ -52,6 +62,11 @@ class PosProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setGstPercentage(double rate) {
+    _gstPercentage = rate;
+    notifyListeners();
+  }
+
   void setPaymentMode(String mode) {
     _paymentMode = mode;
     notifyListeners();
@@ -63,6 +78,7 @@ class PosProvider extends ChangeNotifier {
     _customerName = '';
     _customerPhone = '';
     _discount = 0.0;
+    _gstPercentage = 0.0;
     _paymentMode = 'Credit';
     _searchResults = [];
     notifyListeners();
@@ -90,32 +106,46 @@ class PosProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Add item to active cart
-  void addItemToCart({
+  // Add item to active cart with stock limit validation
+  Map<String, dynamic> addItemToCart({
     required String name,
     required String batch,
     required String expiry,
     required int quantity,
     required double mrp,
     required double salePrice,
+    int? availableStock,
     String? substitutes,
     String? category,
   }) {
+    if (quantity <= 0) {
+      return {'success': false, 'message': 'Quantity must be greater than 0.'};
+    }
+
     // Check if item already exists in cart, if so update quantity
     final existingIndex = _cartItems.indexWhere(
         (item) => item.medicineName.toLowerCase() == name.toLowerCase() && item.batchNumber == batch);
 
+    final currentInCart = existingIndex != -1 ? _cartItems[existingIndex].quantity : 0;
+    final totalRequestedQty = currentInCart + quantity;
+
+    if (availableStock != null && totalRequestedQty > availableStock) {
+      return {
+        'success': false,
+        'message': 'Cannot add quantity ($totalRequestedQty). Only $availableStock units available in batch "$batch".',
+      };
+    }
+
     if (existingIndex != -1) {
       final existingItem = _cartItems[existingIndex];
-      final newQty = existingItem.quantity + quantity;
       _cartItems[existingIndex] = BillItem(
         medicineName: existingItem.medicineName,
         batchNumber: existingItem.batchNumber,
         expiryDate: existingItem.expiryDate,
-        quantity: newQty,
+        quantity: totalRequestedQty,
         mrp: existingItem.mrp,
         salePrice: existingItem.salePrice,
-        totalPrice: newQty * existingItem.salePrice,
+        totalPrice: totalRequestedQty * existingItem.salePrice,
         substitutes: existingItem.substitutes ?? substitutes,
         category: existingItem.category ?? category,
       );
@@ -133,6 +163,7 @@ class PosProvider extends ChangeNotifier {
       ));
     }
     notifyListeners();
+    return {'success': true};
   }
 
   void updateItemQuantity(int index, int newQty) {
@@ -160,8 +191,8 @@ class PosProvider extends ChangeNotifier {
     }
   }
 
-  // Complete billing & push to Firestore (with local in-memory fallback)
-  Future<Map<String, dynamic>> checkout() async {
+  // Complete billing & push to Firestore
+  Future<Map<String, dynamic>> checkout({List<dynamic>? currentInventory}) async {
     if (_cartItems.isEmpty) {
       return {'success': false, 'message': 'Cart is empty'};
     }
@@ -175,30 +206,39 @@ class PosProvider extends ChangeNotifier {
       items: List.from(_cartItems),
       totalAmount: totalAmount,
       discount: _discount,
+      gstPercentage: _gstPercentage,
+      gstAmount: gstAmount,
       netAmount: netAmount,
       createdAt: DateTime.now(),
       paymentMode: _paymentMode,
     );
 
     try {
-      // Try to save to Firebase
-      final billId = await FirebaseService.instance.createBill(bill);
+      final res = await FirebaseService.instance.createBill(bill);
+      final billId = res['id'] as String;
+      final warnings = res['warnings'] as List<String>? ?? [];
+
       resetCart();
+      String msg = 'Bill #$billNumber generated successfully.';
+      if (warnings.isNotEmpty) {
+        msg += '\nNote: ${warnings.join(" ")}';
+      }
+
       return {
         'success': true,
-        'message': 'Bill #$billNumber generated successfully & uploaded to Firebase.',
+        'message': msg,
         'billId': billId,
         'bill': bill,
+        'warnings': warnings,
       };
     } catch (e) {
-      // Fallback to local simulated storage
       debugPrint('Firebase checkout failed, saving locally: $e');
       final offlineBill = bill.copyWith(id: 'local_${DateTime.now().millisecondsSinceEpoch}');
       _localFallbackBills.add(offlineBill);
       resetCart();
       return {
         'success': true,
-        'message': 'Bill #$billNumber generated offline (Firebase not configured).',
+        'message': 'Bill #$billNumber generated offline (Saved to local memory).',
         'billId': offlineBill.id,
         'bill': offlineBill,
         'isOffline': true,

@@ -989,16 +989,27 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
       return;
     }
 
-    posProvider.addItemToCart(
+    final res = posProvider.addItemToCart(
       name: name,
       batch: batch,
       expiry: expiry,
       quantity: qty,
       mrp: mrp,
       salePrice: salePrice,
+      availableStock: _matchedInventoryItem?.quantity,
       substitutes: _selectedMasterMedicine?.composition,
       category: _selectedMasterMedicine?.manufacturer,
     );
+
+    if (res['success'] != true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(res['message'] ?? 'Stock limit error'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
 
     // Reset input fields
     setState(() {
@@ -1049,8 +1060,8 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
       }
     }
 
-    // Checkout
-    final result = await posProvider.checkout();
+    // Checkout with inventory stock revalidation
+    final result = await posProvider.checkout(currentInventory: dashProvider.inventory);
 
     if (result['success'] == true) {
       final BillModel completedBill = result['bill'];
@@ -1073,6 +1084,7 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
             completedBill,
             pharmacyName: dashProvider.pharmacyName,
             storeAddress: dashProvider.storeAddress,
+            gstin: dashProvider.gstin,
           );
         } catch (e) {
           debugPrint('Print error: $e');
@@ -1849,11 +1861,12 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
                           Row(
                             children: [
                               Expanded(
+                                flex: 2,
                                 child: TextField(
                                   controller: _discountController,
                                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                   decoration: const InputDecoration(
-                                    labelText: 'Discount Deduction (₹)',
+                                    labelText: 'Discount (₹)',
                                     prefixIcon: Icon(Icons.local_offer, size: 18, color: AppColors.textSecondary),
                                   ),
                                   onChanged: (val) {
@@ -1862,9 +1875,33 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
                                 ),
                               ),
                               const SizedBox(width: 8),
-                                Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    initialValue: posProvider.paymentMode,
+                              Expanded(
+                                flex: 2,
+                                child: DropdownButtonFormField<double>(
+                                  value: posProvider.gstPercentage,
+                                  decoration: const InputDecoration(
+                                    labelText: 'GST Rate',
+                                    prefixIcon: Icon(Icons.percent, size: 18, color: AppColors.textSecondary),
+                                  ),
+                                  dropdownColor: AppColors.surface,
+                                  items: [0.0, 5.0, 12.0, 18.0, 28.0]
+                                      .map((rate) => DropdownMenuItem(
+                                            value: rate,
+                                            child: Text(rate == 0.0 ? 'Exempt (0%)' : 'GST ${rate.toStringAsFixed(0)}%', style: const TextStyle(fontSize: 13)),
+                                          ))
+                                      .toList(),
+                                  onChanged: (val) {
+                                    if (val != null) {
+                                      posProvider.setGstPercentage(val);
+                                    }
+                                  },
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                flex: 2,
+                                child: DropdownButtonFormField<String>(
+                                  initialValue: posProvider.paymentMode,
                                   decoration: const InputDecoration(
                                     labelText: 'Payment Mode',
                                     prefixIcon: Icon(Icons.payment, size: 18, color: AppColors.textSecondary),
@@ -1895,14 +1932,20 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'Gross: ₹${posProvider.totalAmount.toStringAsFixed(2)}',
+                                    'Gross: ₹${posProvider.totalAmount.toStringAsFixed(2)}  |  Disc: -₹${posProvider.discount.toStringAsFixed(2)}',
                                     style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
                                   ),
                                   const SizedBox(height: 2),
-                                  Text(
-                                    'Discount: ₹${posProvider.discount.toStringAsFixed(2)}',
-                                    style: const TextStyle(color: AppColors.error, fontSize: 12),
-                                  ),
+                                  if (posProvider.gstAmount > 0)
+                                    Text(
+                                      'Taxable: ₹${posProvider.taxableAmount.toStringAsFixed(2)}  +  GST (${posProvider.gstPercentage.toStringAsFixed(0)}%): ₹${posProvider.gstAmount.toStringAsFixed(2)}',
+                                      style: const TextStyle(color: AppColors.primaryLight, fontSize: 12, fontWeight: FontWeight.w600),
+                                    )
+                                  else
+                                    Text(
+                                      'Taxable Net: ₹${posProvider.taxableAmount.toStringAsFixed(2)} (Tax Exempt)',
+                                      style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
+                                    ),
                                 ],
                               ),
                               Column(

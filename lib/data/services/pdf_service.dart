@@ -13,6 +13,7 @@ class PdfService {
     BillModel bill, {
     String? pharmacyName,
     String? storeAddress,
+    String? gstin,
   }) async {
     final doc = pw.Document();
     final dateFormat = DateFormat('dd-MM-yyyy hh:mm a');
@@ -45,6 +46,14 @@ class PdfService {
                 textAlign: pw.TextAlign.center,
                 style: const pw.TextStyle(fontSize: 8),
               ),
+              if (gstin != null && gstin.trim().isNotEmpty) ...[
+                pw.SizedBox(height: 2),
+                pw.Text(
+                  'GSTIN: ${gstin.trim()}',
+                  textAlign: pw.TextAlign.center,
+                  style: const pw.TextStyle(fontSize: 8),
+                ),
+              ],
               pw.SizedBox(height: 6),
               pw.Divider(thickness: 0.5),
               pw.SizedBox(height: 4),
@@ -283,6 +292,34 @@ class PdfService {
                     ),
                   ],
                 ),
+              if (bill.gstAmount > 0) ...[
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Text(
+                      'Taxable Amt:',
+                      style: const pw.TextStyle(fontSize: 8),
+                    ),
+                    pw.Text(
+                      'Rs.${(bill.totalAmount - bill.discount).toStringAsFixed(2)}',
+                      style: const pw.TextStyle(fontSize: 8),
+                    ),
+                  ],
+                ),
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Text(
+                      'GST (${bill.gstPercentage.toStringAsFixed(1)}%):',
+                      style: const pw.TextStyle(fontSize: 8),
+                    ),
+                    pw.Text(
+                      '+Rs.${bill.gstAmount.toStringAsFixed(2)}',
+                      style: const pw.TextStyle(fontSize: 8),
+                    ),
+                  ],
+                ),
+              ],
               pw.SizedBox(height: 2),
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
@@ -348,6 +385,7 @@ class PdfService {
     BillModel bill, {
     String? pharmacyName,
     String? storeAddress,
+    String? gstin,
   }) async {
     final doc = pw.Document();
     final dateFormat = DateFormat('dd-MM-yyyy hh:mm a');
@@ -381,6 +419,14 @@ class PdfService {
                 textAlign: pw.TextAlign.center,
                 style: const pw.TextStyle(fontSize: 8),
               ),
+              if (gstin != null && gstin.trim().isNotEmpty) ...[
+                pw.SizedBox(height: 2),
+                pw.Text(
+                  'GSTIN: ${gstin.trim()}',
+                  textAlign: pw.TextAlign.center,
+                  style: const pw.TextStyle(fontSize: 8),
+                ),
+              ],
               pw.SizedBox(height: 6),
               pw.Divider(thickness: 0.5),
               pw.SizedBox(height: 4),
@@ -623,6 +669,34 @@ class PdfService {
                     ),
                   ],
                 ),
+              if (bill.gstAmount > 0) ...[
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Text(
+                      'Taxable Amt:',
+                      style: const pw.TextStyle(fontSize: 8),
+                    ),
+                    pw.Text(
+                      'Rs.${(bill.totalAmount - bill.discount).toStringAsFixed(2)}',
+                      style: const pw.TextStyle(fontSize: 8),
+                    ),
+                  ],
+                ),
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Text(
+                      'GST (${bill.gstPercentage.toStringAsFixed(1)}%):',
+                      style: const pw.TextStyle(fontSize: 8),
+                    ),
+                    pw.Text(
+                      '+Rs.${bill.gstAmount.toStringAsFixed(2)}',
+                      style: const pw.TextStyle(fontSize: 8),
+                    ),
+                  ],
+                ),
+              ],
               pw.SizedBox(height: 2),
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,

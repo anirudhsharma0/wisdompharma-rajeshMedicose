@@ -11,6 +11,7 @@ import 'providers/dashboard_provider.dart';
 import 'ui/desktop/layout/desktop_layout.dart';
 import 'ui/mobile/layout/mobile_layout.dart';
 
+import 'data/services/firebase_service.dart';
 import 'data/services/license_service.dart';
 import 'ui/common/screens/license_blocked_screen.dart';
 
@@ -29,6 +30,7 @@ void main() async {
       options: DefaultFirebaseOptions.currentPlatform,
     );
     debugPrint('Firebase Core initialized successfully with options.');
+    await FirebaseService.instance.ensureAuthenticated();
   } catch (e) {
     debugPrint('Firebase initialization bypassed or failed (offline simulation mode activated): $e');
   }

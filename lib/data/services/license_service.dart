@@ -51,7 +51,7 @@ class LicenseService {
       await verifyOnline(sheetUrl, clientId);
     } catch (e) {
       debugPrint('LicenseService: Online check failed (device might be offline): $e');
-      _applyOfflinePolicy();
+      await _applyOfflinePolicy();
     }
 
     return !isBlocked;
@@ -61,7 +61,7 @@ class LicenseService {
   Future<bool> verifyOnline(String targetSheetUrl, String targetClientId) async {
     if (targetSheetUrl.trim().isEmpty || targetSheetUrl.contains('SampleSheetPlaceholder')) {
       debugPrint('LicenseService: No valid Google Sheet CSV URL set. Skipping online fetch.');
-      _applyOfflinePolicy();
+      await _applyOfflinePolicy();
       return !isBlocked;
     }
 
@@ -120,11 +120,11 @@ class LicenseService {
         } else {
           // Client ID not found in sheet
           debugPrint('LicenseService: Client ID [$targetClientId] not listed in Google Sheet.');
-          _applyOfflinePolicy();
+          await _applyOfflinePolicy();
         }
       } else {
         debugPrint('LicenseService: HTTP Response status code ${response.statusCode}');
-        _applyOfflinePolicy();
+        await _applyOfflinePolicy();
       }
     } finally {
       client.close();
@@ -134,7 +134,7 @@ class LicenseService {
   }
 
   /// Offline policy verification (Grace Period)
-  void _applyOfflinePolicy() async {
+  Future<void> _applyOfflinePolicy() async {
     final prefs = await SharedPreferences.getInstance();
     final cachedBlocked = prefs.getBool(_keyIsBlocked) ?? false;
 

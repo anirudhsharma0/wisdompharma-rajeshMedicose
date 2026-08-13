@@ -60,6 +60,8 @@ class BillModel {
   final List<BillItem> items;
   final double totalAmount;
   final double discount;
+  final double gstPercentage;
+  final double gstAmount;
   final double netAmount;
   final DateTime createdAt;
   final String paymentMode; // 'Cash', 'UPI', 'Card', 'Credit'
@@ -74,6 +76,8 @@ class BillModel {
     required this.items,
     required this.totalAmount,
     required this.discount,
+    this.gstPercentage = 0.0,
+    this.gstAmount = 0.0,
     required this.netAmount,
     required this.createdAt,
     required this.paymentMode,
@@ -105,6 +109,8 @@ class BillModel {
       items: parsedItems,
       totalAmount: (map['totalAmount'] as num?)?.toDouble() ?? 0.0,
       discount: (map['discount'] as num?)?.toDouble() ?? 0.0,
+      gstPercentage: (map['gstPercentage'] as num?)?.toDouble() ?? 0.0,
+      gstAmount: (map['gstAmount'] as num?)?.toDouble() ?? 0.0,
       netAmount: (map['netAmount'] as num?)?.toDouble() ?? 0.0,
       createdAt: createdDate,
       paymentMode: map['paymentMode'] ?? 'Cash',
@@ -121,6 +127,8 @@ class BillModel {
       'items': items.map((item) => item.toMap()).toList(),
       'totalAmount': totalAmount,
       'discount': discount,
+      'gstPercentage': gstPercentage,
+      'gstAmount': gstAmount,
       'netAmount': netAmount,
       'createdAt': Timestamp.fromDate(createdAt),
       'paymentMode': paymentMode,
@@ -138,6 +146,8 @@ class BillModel {
     List<BillItem>? items,
     double? totalAmount,
     double? discount,
+    double? gstPercentage,
+    double? gstAmount,
     double? netAmount,
     DateTime? createdAt,
     String? paymentMode,
@@ -152,6 +162,8 @@ class BillModel {
       items: items ?? this.items,
       totalAmount: totalAmount ?? this.totalAmount,
       discount: discount ?? this.discount,
+      gstPercentage: gstPercentage ?? this.gstPercentage,
+      gstAmount: gstAmount ?? this.gstAmount,
       netAmount: netAmount ?? this.netAmount,
       createdAt: createdAt ?? this.createdAt,
       paymentMode: paymentMode ?? this.paymentMode,
