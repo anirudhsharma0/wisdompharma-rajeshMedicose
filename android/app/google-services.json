@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "172084599428",
+    "firebase_url": "https://medical-store-app-18b9a-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "medical-store-app-18b9a",
+    "storage_bucket": "medical-store-app-18b9a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:172084599428:android:b2bf94f48993b819fdc0d1",
+        "android_client_info": {
+          "package_name": "com.medical.store.medical_store"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCU87m0NZ9QKjE7nTiiWNTythTo0upQ1SY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
