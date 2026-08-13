@@ -129,14 +129,12 @@ class DashboardProvider extends ChangeNotifier {
           if (data.isNotEmpty) {
             _customers = data;
             _firebaseActive = true;
+            _saveOfflineCustomers();
           } else {
-            if (_initialUserCustomers.isNotEmpty) {
-              _customers = List.from(_initialUserCustomers);
-              _saveOfflineCustomers();
+            if (_customers.isNotEmpty) {
+              // Automatically sync local customer database to Firebase
               FirebaseService.instance.batchCreateCustomers(_customers);
-            } else {
-              _customers = [];
-              _saveOfflineCustomers();
+              _firebaseActive = true;
             }
           }
           notifyListeners();
@@ -176,6 +174,8 @@ class DashboardProvider extends ChangeNotifier {
         (data) {
           if (data.isNotEmpty) {
             _suppliers = data;
+          } else if (_suppliers.isNotEmpty) {
+            FirebaseService.instance.batchCreateSuppliers(_suppliers);
           }
           notifyListeners();
         },
@@ -206,27 +206,17 @@ class DashboardProvider extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       final customersJson = prefs.getString('offline_customers_json');
-      if (_initialUserCustomers.isEmpty) {
-        _customers = [];
-        await prefs.remove('offline_customers_json');
-        await prefs.remove('offline_payments_json');
-      } else if (customersJson != null && customersJson.isNotEmpty) {
+      if (customersJson != null && customersJson.isNotEmpty) {
         final List dynamicList = jsonDecode(customersJson);
         if (dynamicList.isNotEmpty) {
           _customers = dynamicList.map((item) => CustomerModel.fromMap(Map<String, dynamic>.from(item), item['id'] ?? '')).toList();
-        } else {
+        } else if (_initialUserCustomers.isNotEmpty) {
           _customers = List.from(_initialUserCustomers);
           _saveOfflineCustomers();
-          if (_firebaseActive) {
-            FirebaseService.instance.batchCreateCustomers(_customers);
-          }
         }
-      } else {
+      } else if (_initialUserCustomers.isNotEmpty) {
         _customers = List.from(_initialUserCustomers);
         _saveOfflineCustomers();
-        if (_firebaseActive) {
-          FirebaseService.instance.batchCreateCustomers(_customers);
-        }
       }
 
       final paymentsJson = prefs.getString('offline_payments_json');
@@ -239,7 +229,6 @@ class DashboardProvider extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       debugPrint('Error loading offline customers: $e');
-      _customers = [];
       notifyListeners();
     }
   }
@@ -566,26 +555,23 @@ class DashboardProvider extends ChangeNotifier {
     }
 
     if (_firebaseActive) {
-      await FirebaseService.instance.createCustomer(customer);
+      final docId = await FirebaseService.instance.createCustomer(customer);
+      _customers.add(customer.copyWith(id: docId));
     } else {
       _customers.add(customer.copyWith(id: 'mock_cust_${DateTime.now().millisecondsSinceEpoch}'));
-      _saveOfflineCustomers();
-      notifyListeners();
     }
+    await _saveOfflineCustomers();
+    notifyListeners();
     return true; // Added successfully
   }
 
   Future<void> batchAddCustomers(List<CustomerModel> customerList) async {
+    _customers.addAll(customerList);
+    await _saveOfflineCustomers();
+    notifyListeners();
+
     if (_firebaseActive) {
       await FirebaseService.instance.batchCreateCustomers(customerList);
-    } else {
-      int count = 0;
-      for (var c in customerList) {
-        count++;
-        _customers.add(c.copyWith(id: 'c_$count'));
-      }
-      await _saveOfflineCustomers();
-      notifyListeners();
     }
   }
 
