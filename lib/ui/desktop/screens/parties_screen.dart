@@ -187,7 +187,8 @@ class _PartiesScreenState extends State<PartiesScreen> {
     } else {
       // Customer Transactions
       for (var b in provider.bills) {
-        final matchesName = b.customerName.trim().toLowerCase() == pName;
+        final bName = b.customerName.trim().toLowerCase();
+        final matchesName = bName.isNotEmpty && (bName == pName || bName.contains(pName) || pName.contains(bName));
         final matchesPhone = pPhone.isNotEmpty && b.customerPhone.trim() == pPhone;
         if (matchesName || matchesPhone) {
           list.add(PartyTransaction(
@@ -205,7 +206,8 @@ class _PartiesScreenState extends State<PartiesScreen> {
       }
 
       for (var p in provider.customerPayments) {
-        final matchesName = p.customerName.trim().toLowerCase() == pName;
+        final cName = p.customerName.trim().toLowerCase();
+        final matchesName = cName.isNotEmpty && (cName == pName || cName.contains(pName) || pName.contains(cName));
         final matchesPhone = pPhone.isNotEmpty && p.customerPhone.trim() == pPhone;
         if (matchesName || matchesPhone) {
           list.add(PartyTransaction(
@@ -223,20 +225,35 @@ class _PartiesScreenState extends State<PartiesScreen> {
       }
 
       for (var v in provider.vouchers) {
-        final matchesName = v.partyName.trim().toLowerCase() == pName;
+        final vName = v.partyName.trim().toLowerCase();
+        final matchesName = vName.isNotEmpty && (vName == pName || vName.contains(pName) || pName.contains(vName));
         final matchesPhone = pPhone.isNotEmpty && v.partyPhone.trim() == pPhone;
-        if ((matchesName || matchesPhone) && v.type == 'RECEIPT') {
-          list.add(PartyTransaction(
-            id: v.id ?? 'vouch_${v.voucherNumber}',
-            type: 'Payment-In',
-            refNumber: v.voucherNumber,
-            date: v.createdAt,
-            totalAmount: v.amount,
-            balance: 0.0,
-            status: 'Received',
-            remarks: v.remarks,
-            rawObject: v,
-          ));
+        if (matchesName || matchesPhone) {
+          if (v.type == 'RECEIPT') {
+            list.add(PartyTransaction(
+              id: v.id ?? 'vouch_${v.voucherNumber}',
+              type: 'Payment-In',
+              refNumber: v.voucherNumber,
+              date: v.createdAt,
+              totalAmount: v.amount,
+              balance: 0.0,
+              status: 'Received',
+              remarks: v.remarks,
+              rawObject: v,
+            ));
+          } else if (v.type == 'SALE') {
+            list.add(PartyTransaction(
+              id: v.id ?? 'vouch_s_${v.voucherNumber}',
+              type: 'Sale',
+              refNumber: v.voucherNumber,
+              date: v.createdAt,
+              totalAmount: v.amount,
+              balance: v.amount,
+              status: v.paymentMode == 'Credit' ? 'Unpaid' : 'Paid',
+              remarks: v.remarks,
+              rawObject: v,
+            ));
+          }
         }
       }
     }
@@ -506,36 +523,50 @@ class _PartiesScreenState extends State<PartiesScreen> {
 
                 if (isPaymentOut) {
                   if (party.partyType == 'Supplier') {
-                    await provider.paySupplier(party.id, amt);
+                    await provider.paySupplier(
+                      party.id,
+                      amt,
+                      paymentMode: payMode,
+                      referenceNumber: refCtrl.text.trim(),
+                      remarks: remarkCtrl.text.trim().isNotEmpty ? remarkCtrl.text.trim() : 'Paid to ${party.name}',
+                    );
+                  } else {
+                    await provider.addVoucher(VoucherModel(
+                      voucherNumber: 'PAY-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+                      type: 'PAYMENT',
+                      partyName: party.name,
+                      partyPhone: party.phone,
+                      amount: amt,
+                      paymentMode: payMode,
+                      category: 'Misc Expense',
+                      referenceNumber: refCtrl.text.trim(),
+                      remarks: remarkCtrl.text.trim().isNotEmpty ? remarkCtrl.text.trim() : 'Paid to ${party.name}',
+                      createdAt: DateTime.now(),
+                    ));
                   }
-                  await provider.addVoucher(VoucherModel(
-                    voucherNumber: 'V-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
-                    type: 'PAYMENT',
-                    partyName: party.name,
-                    partyPhone: party.phone,
-                    amount: amt,
-                    paymentMode: payMode,
-                    category: 'Supplier Payment',
-                    referenceNumber: refCtrl.text.trim(),
-                    remarks: remarkCtrl.text.trim().isNotEmpty ? remarkCtrl.text.trim() : 'Paid to ${party.name}',
-                    createdAt: DateTime.now(),
-                  ));
                 } else {
                   if (party.partyType == 'Customer') {
-                    await provider.collectCustomerPayment(party.id, amt);
+                    await provider.collectCustomerPayment(
+                      party.id,
+                      amt,
+                      paymentMode: payMode,
+                      referenceNumber: refCtrl.text.trim(),
+                      remarks: remarkCtrl.text.trim().isNotEmpty ? remarkCtrl.text.trim() : 'Received from ${party.name}',
+                    );
+                  } else {
+                    await provider.addVoucher(VoucherModel(
+                      voucherNumber: 'RCP-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+                      type: 'RECEIPT',
+                      partyName: party.name,
+                      partyPhone: party.phone,
+                      amount: amt,
+                      paymentMode: payMode,
+                      category: 'Misc Income',
+                      referenceNumber: refCtrl.text.trim(),
+                      remarks: remarkCtrl.text.trim().isNotEmpty ? remarkCtrl.text.trim() : 'Received from ${party.name}',
+                      createdAt: DateTime.now(),
+                    ));
                   }
-                  await provider.addVoucher(VoucherModel(
-                    voucherNumber: 'V-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
-                    type: 'RECEIPT',
-                    partyName: party.name,
-                    partyPhone: party.phone,
-                    amount: amt,
-                    paymentMode: payMode,
-                    category: 'Customer Khata',
-                    referenceNumber: refCtrl.text.trim(),
-                    remarks: remarkCtrl.text.trim().isNotEmpty ? remarkCtrl.text.trim() : 'Received from ${party.name}',
-                    createdAt: DateTime.now(),
-                  ));
                 }
 
                 if (!context.mounted) return;
@@ -549,6 +580,118 @@ class _PartiesScreenState extends State<PartiesScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showAddCustomerSaleDialog(BuildContext context, PartyItem party, DashboardProvider provider) {
+    final amtCtrl = TextEditingController();
+    final paidAmtCtrl = TextEditingController(text: '0.0');
+    final refCtrl = TextEditingController(text: 'SAL-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}');
+    final remarkCtrl = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.add_shopping_cart, color: Colors.red, size: 24),
+            const SizedBox(width: 10),
+            Text('Add Sale / Udhar Entry (${party.name})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Current Pending Balance:', style: TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+                  Text('₹${party.amount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.red)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: amtCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Total Sale Amount (₹) *',
+                hintText: 'e.g. 450.00',
+                prefixIcon: Icon(Icons.currency_rupee, size: 18),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: paidAmtCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Amount Paid Now (₹)',
+                hintText: '0.0 for full credit/udhar',
+                prefixIcon: Icon(Icons.payments_outlined, size: 18),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: refCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Bill / Ref Number',
+                prefixIcon: Icon(Icons.numbers, size: 18),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: remarkCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Sale Description / Medicine Details (Optional)',
+                hintText: 'e.g. Dawaat & Syrup Items',
+                prefixIcon: Icon(Icons.notes, size: 18),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              final amt = double.tryParse(amtCtrl.text) ?? 0.0;
+              final paidNow = double.tryParse(paidAmtCtrl.text) ?? 0.0;
+
+              if (amt <= 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter a valid Sale Amount')),
+                );
+                return;
+              }
+
+              await provider.addCustomerSale(
+                party.id,
+                amt,
+                amountPaidNow: paidNow,
+                referenceNumber: refCtrl.text.trim(),
+                remarks: remarkCtrl.text.trim().isNotEmpty ? remarkCtrl.text.trim() : 'Udhar / Manual Sale to ${party.name}',
+              );
+
+              if (!context.mounted) return;
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  backgroundColor: AppColors.success,
+                  content: Text('✓ Sale entry of ₹$amt added for ${party.name}!'),
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Save Sale Entry'),
+          ),
+        ],
       ),
     );
   }
@@ -1403,21 +1546,30 @@ class _PartiesScreenState extends State<PartiesScreen> {
 
                   final detailedRemarks = 'Purchase Invoice #$invNo ($addedCount items):\n• ${itemSummaryLines.join('\n• ')}';
 
-                  await provider.addVoucher(VoucherModel(
-                    voucherNumber: invNo,
-                    type: 'PURCHASE',
-                    partyName: party.name,
-                    partyPhone: party.phone,
-                    amount: totalBillAmount,
-                    paymentMode: paidAmt > 0 ? (paidAmt >= totalBillAmount ? 'Cash' : 'Part Payment') : 'Credit',
-                    category: 'Stock Purchase',
-                    referenceNumber: invNo,
-                    remarks: detailedRemarks,
-                    createdAt: DateTime.now(),
-                  ));
+                  final mode = paidAmt > 0 ? (paidAmt >= totalBillAmount ? 'Cash' : 'Part Payment') : 'Credit';
 
                   if (party.partyType == 'Supplier') {
-                    await provider.addSupplierDue(party.id, totalBillAmount);
+                    await provider.addSupplierPurchase(
+                      party.id,
+                      totalBillAmount,
+                      billNumber: invNo,
+                      remarks: detailedRemarks,
+                      paymentMode: mode,
+                      partyPhone: party.phone,
+                    );
+                  } else {
+                    await provider.addVoucher(VoucherModel(
+                      voucherNumber: invNo,
+                      type: 'PURCHASE',
+                      partyName: party.name,
+                      partyPhone: party.phone,
+                      amount: totalBillAmount,
+                      paymentMode: mode,
+                      category: 'Stock Purchase',
+                      referenceNumber: invNo,
+                      remarks: detailedRemarks,
+                      createdAt: DateTime.now(),
+                    ));
                   }
 
                   // If immediate payment is made, settle paid amount and generate voucher / receipt
@@ -1889,115 +2041,76 @@ class _PartiesScreenState extends State<PartiesScreen> {
       padding: const EdgeInsets.all(20.0),
       child: Column(
         children: [
+          // 1. CLEAN & MODERN TOP HEADER BAR
           Row(
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _selectedCategoryFilter,
-                    icon: const Icon(Icons.arrow_drop_down, color: AppColors.primary),
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
-                    items: const [
-                      DropdownMenuItem(value: 'ALL', child: Text('All Parties & Agencies')),
-                      DropdownMenuItem(value: 'SUPPLIERS', child: Text('Wholesale Suppliers / Agencies')),
-                      DropdownMenuItem(value: 'CUSTOMERS', child: Text('Customers (Khata Ledgers)')),
-                    ],
-                    onChanged: (val) {
-                      if (val != null) {
-                        setState(() {
-                          _selectedCategoryFilter = val;
-                          _selectedPartyId = null;
-                        });
-                      }
-                    },
+              // Dynamic Title based on Active Sidebar Selection / Category Filter
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _selectedCategoryFilter == 'CUSTOMERS'
+                        ? Icons.person_outline
+                        : (_selectedCategoryFilter == 'SUPPLIERS' ? Icons.local_shipping_outlined : Icons.menu_book),
+                    color: AppColors.primary,
+                    size: 24,
                   ),
-                ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _selectedCategoryFilter == 'CUSTOMERS'
+                        ? 'Customer Khata (ग्राहक खाता)'
+                        : (_selectedCategoryFilter == 'SUPPLIERS' ? 'Wholesale Suppliers (थोक विक्रेता)' : 'Khata Ledger & Parties'),
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                  ),
+                ],
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SizedBox(
-                        width: 220,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Flexible(
+                      child: Container(
+                        constraints: const BoxConstraints(maxWidth: 220),
                         child: TextField(
                           onChanged: (val) => setState(() => _transactionSearchQuery = val),
                           decoration: InputDecoration(
-                            hintText: 'Search Ref No., Type...',
-                            prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.textSecondary),
-                            contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                            hintText: 'Search Transactions...',
+                            prefixIcon: const Icon(Icons.search, size: 16, color: AppColors.textSecondary),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
                             isDense: true,
+                            fillColor: Colors.white,
+                            filled: true,
                             border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: selectedParty.id.isNotEmpty && selectedParty.partyType == 'Supplier'
-                            ? () => _showAddPurchaseBillDialog(context, selectedParty, provider)
-                            : null,
-                        icon: const Icon(Icons.add_shopping_cart, size: 16, color: Colors.blue),
-                        label: const Text('+ Add Purchase Bill', style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Colors.blue),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: () => _showImportChoiceDialog(context, provider),
+                      icon: const Icon(Icons.file_upload, size: 15, color: Colors.indigo),
+                      label: const Text('Import CSV', style: TextStyle(color: Colors.indigo, fontWeight: FontWeight.bold, fontSize: 12)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.indigo),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
                       ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: selectedParty.id.isNotEmpty
-                            ? () => _showAddPaymentDialog(context, selectedParty, provider, isPaymentOut: true)
-                            : null,
-                        icon: const Icon(Icons.call_made, size: 16, color: Colors.orange),
-                        label: const Text('Payment Out', style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Colors.orange),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        ),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: () => _showAddPartyDialog(context, provider),
+                      icon: const Icon(Icons.person_add_alt_1, size: 16),
+                      label: Text(
+                        _selectedCategoryFilter == 'CUSTOMERS' ? '+ New Customer' : (_selectedCategoryFilter == 'SUPPLIERS' ? '+ New Wholesaler' : '+ New Party'),
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                       ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: selectedParty.id.isNotEmpty
-                            ? () => _showAddPaymentDialog(context, selectedParty, provider, isPaymentOut: false)
-                            : null,
-                        icon: const Icon(Icons.call_received, size: 16, color: AppColors.success),
-                        label: const Text('Payment In', style: TextStyle(color: AppColors.success, fontWeight: FontWeight.bold)),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: AppColors.success),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFDC2626),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                       ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: () => _showImportChoiceDialog(context, provider),
-                        icon: const Icon(Icons.file_upload, size: 16, color: Colors.indigo),
-                        label: const Text('Import CSV/Excel', style: TextStyle(color: Colors.indigo, fontWeight: FontWeight.bold)),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Colors.indigo),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton.icon(
-                        onPressed: () => _showAddPartyDialog(context, provider),
-                        icon: const Icon(Icons.person_add_alt_1, size: 18),
-                        label: const Text('+ Add Party', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFDC2626),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -2017,35 +2130,16 @@ class _PartiesScreenState extends State<PartiesScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        // Quick Add Party & Search Row
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                onChanged: (val) => setState(() => _partySearchQuery = val),
-                                decoration: InputDecoration(
-                                  hintText: 'Search Party Name...',
-                                  prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.primary),
-                                  contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                                  isDense: true,
-                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            InkWell(
-                              onTap: () => _showAddPartyDialog(context, provider),
-                              borderRadius: BorderRadius.circular(8),
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFDC2626),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Icon(Icons.person_add, color: Colors.white, size: 20),
-                              ),
-                            ),
-                          ],
+                        // Quick Search Row
+                        TextField(
+                          onChanged: (val) => setState(() => _partySearchQuery = val),
+                          decoration: InputDecoration(
+                            hintText: _selectedCategoryFilter == 'CUSTOMERS' ? 'Search Customer Name/Mobile...' : 'Search Wholesaler/Agency...',
+                            prefixIcon: const Icon(Icons.search, size: 18, color: AppColors.primary),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                            isDense: true,
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
                         ),
                         const SizedBox(height: 10),
                         // List Table Headers
@@ -2056,7 +2150,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: const [
                               Text('PARTY NAME', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: AppColors.primaryLight)),
-                              Text('AMOUNT (₹)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: AppColors.primaryLight)),
+                              Text('BAL DUE (₹)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: AppColors.primaryLight)),
                             ],
                           ),
                         ),
@@ -2064,7 +2158,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
                         // Parties List View
                         Expanded(
                           child: allParties.isEmpty
-                              ? const Center(child: Text('No parties found.', style: TextStyle(color: AppColors.textMuted)))
+                              ? const Center(child: Text('No entries found.', style: TextStyle(color: AppColors.textMuted)))
                               : ListView.builder(
                                   itemCount: allParties.length,
                                   itemBuilder: (context, idx) {
@@ -2105,13 +2199,12 @@ class _PartiesScreenState extends State<PartiesScreen> {
                                                     maxLines: 1,
                                                     overflow: TextOverflow.ellipsis,
                                                   ),
-                                                  if (p.phone.isNotEmpty)
-                                                    Text(
-                                                      '${p.partyType} • ${p.phone}',
-                                                      style: const TextStyle(fontSize: 10, color: AppColors.textMuted),
-                                                      maxLines: 1,
-                                                      overflow: TextOverflow.ellipsis,
-                                                    ),
+                                                  Text(
+                                                    p.phone.isNotEmpty ? 'Phone: ${p.phone}' : 'No Phone Number',
+                                                    style: const TextStyle(fontSize: 10, color: AppColors.textMuted),
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
                                                 ],
                                               ),
                                             ),
@@ -2271,7 +2364,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.stretch,
                                   children: [
-                                    // Header Bar
+                                    // Header Bar with Specialized Buttons
                                     Padding(
                                       padding: const EdgeInsets.all(12.0),
                                       child: Row(
@@ -2285,40 +2378,57 @@ class _PartiesScreenState extends State<PartiesScreen> {
                                             scrollDirection: Axis.horizontal,
                                             child: Row(
                                               children: [
-                                                IconButton(
-                                                  icon: const Icon(Icons.print, size: 18, color: AppColors.primary),
-                                                  tooltip: 'Print Ledger Statement',
-                                                  onPressed: () {
-                                                    // Print statement
-                                                  },
-                                                ),
-                                                if (selectedParty.partyType == 'Supplier') ...[
+                                                if (selectedParty.partyType == 'Customer') ...[
+                                                  ElevatedButton.icon(
+                                                    onPressed: () => _showAddCustomerSaleDialog(context, selectedParty, provider),
+                                                    icon: const Icon(Icons.add_shopping_cart, size: 14),
+                                                    label: const Text('+ Add Sale Entry (उधार)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: Colors.red.shade700,
+                                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                                    ),
+                                                  ),
                                                   const SizedBox(width: 8),
+                                                  ElevatedButton.icon(
+                                                    onPressed: () => _showAddPaymentDialog(
+                                                      context,
+                                                      selectedParty,
+                                                      provider,
+                                                      isPaymentOut: false,
+                                                    ),
+                                                    icon: const Icon(Icons.call_received, size: 14),
+                                                    label: const Text('+ Receive Payment (जमा)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: AppColors.success,
+                                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                                    ),
+                                                  ),
+                                                ] else ...[
                                                   ElevatedButton.icon(
                                                     onPressed: () => _showAddPurchaseBillDialog(context, selectedParty, provider),
                                                     icon: const Icon(Icons.add_shopping_cart, size: 14),
-                                                    label: const Text('+ Add Purchase Bill', style: TextStyle(fontSize: 11)),
+                                                    label: const Text('+ Add Purchase Bill', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                                                     style: ElevatedButton.styleFrom(
                                                       backgroundColor: Colors.blue.shade700,
-                                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  ElevatedButton.icon(
+                                                    onPressed: () => _showAddPaymentDialog(
+                                                      context,
+                                                      selectedParty,
+                                                      provider,
+                                                      isPaymentOut: true,
+                                                    ),
+                                                    icon: const Icon(Icons.call_made, size: 14),
+                                                    label: const Text('+ Pay Supplier (भुगतान)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: Colors.orange,
+                                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                                                     ),
                                                   ),
                                                 ],
-                                                const SizedBox(width: 8),
-                                                ElevatedButton.icon(
-                                                  onPressed: () => _showAddPaymentDialog(
-                                                    context,
-                                                    selectedParty,
-                                                    provider,
-                                                    isPaymentOut: selectedParty.partyType == 'Supplier',
-                                                  ),
-                                                  icon: Icon(selectedParty.partyType == 'Supplier' ? Icons.call_made : Icons.call_received, size: 14),
-                                                  label: Text(selectedParty.partyType == 'Supplier' ? '+ Add Payment Out' : '+ Add Payment In', style: const TextStyle(fontSize: 11)),
-                                                  style: ElevatedButton.styleFrom(
-                                                    backgroundColor: selectedParty.partyType == 'Supplier' ? Colors.orange : AppColors.success,
-                                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                                  ),
-                                                ),
                                               ],
                                             ),
                                           ),

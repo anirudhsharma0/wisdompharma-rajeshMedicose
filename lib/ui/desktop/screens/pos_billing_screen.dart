@@ -84,53 +84,59 @@ class PosBillingScreen extends StatefulWidget {
                   }
                 }
 
-                Navigator.pop(dialogCtx);
+                if (dialogCtx.mounted) {
+                  Navigator.pop(dialogCtx);
+                }
 
-                showDialog(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    backgroundColor: AppColors.background,
-                    title: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          shouldPrint ? 'Bill Saved & Sent to Printer' : 'Bill Saved Successfully',
-                          style: const TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.bold),
+                if (context.mounted) {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      backgroundColor: AppColors.background,
+                      title: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            shouldPrint ? 'Bill Saved & Sent to Printer' : 'Bill Saved Successfully',
+                            style: const TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, color: AppColors.textSecondary),
+                            onPressed: () => Navigator.pop(context),
+                          )
+                        ],
+                      ),
+                      content: SizedBox(
+                        width: 400,
+                        child: ReceiptPreview(bill: completedBill),
+                      ),
+                      actions: [
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.print),
+                          label: const Text('Print Receipt'),
+                          style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+                          onPressed: () {
+                            PdfService.printReceipt(
+                              completedBill,
+                              pharmacyName: dashProvider.pharmacyName,
+                              storeAddress: dashProvider.storeAddress,
+                            );
+                          },
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.close, color: AppColors.textSecondary),
+                        TextButton(
+                          child: const Text('Done'),
                           onPressed: () => Navigator.pop(context),
                         )
                       ],
                     ),
-                    content: SizedBox(
-                      width: 400,
-                      child: ReceiptPreview(bill: completedBill),
-                    ),
-                    actions: [
-                      ElevatedButton.icon(
-                        icon: const Icon(Icons.print),
-                        label: const Text('Print Receipt'),
-                        style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-                        onPressed: () {
-                          PdfService.printReceipt(
-                            completedBill,
-                            pharmacyName: dashProvider.pharmacyName,
-                            storeAddress: dashProvider.storeAddress,
-                          );
-                        },
-                      ),
-                      TextButton(
-                        child: const Text('Done'),
-                        onPressed: () => Navigator.pop(context),
-                      )
-                    ],
-                  ),
-                );
+                  );
+                }
               } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Checkout failed: ${result['message']}')),
-                );
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Checkout failed: ${result['message']}')),
+                  );
+                }
               }
             }
 
@@ -280,7 +286,7 @@ class PosBillingScreen extends StatefulWidget {
                           const SizedBox(width: 10),
                           Expanded(
                             child: DropdownButtonFormField<String>(
-                              value: selectedPaymentMode,
+                              initialValue: selectedPaymentMode,
                               decoration: const InputDecoration(
                                 labelText: 'Payment Mode',
                                 prefixIcon: Icon(Icons.payment, size: 18),
@@ -560,307 +566,6 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
     });
     // Request focus on quantity
     _qtyFocusNode.requestFocus();
-  }
-
-  void _showQuickSaleModalDialog(BuildContext context) {
-    final dashProvider = Provider.of<DashboardProvider>(context, listen: false);
-    final posProvider = Provider.of<PosProvider>(context, listen: false);
-
-    final TextEditingController custNameCtrl = TextEditingController();
-    final TextEditingController custPhoneCtrl = TextEditingController();
-    final TextEditingController directAmtCtrl = TextEditingController();
-    final TextEditingController remarkCtrl = TextEditingController();
-    final TextEditingController discountCtrl = TextEditingController(text: '0');
-
-    String selectedPaymentMode = 'Cash';
-
-    showDialog(
-      context: context,
-      builder: (dialogCtx) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            final amt = double.tryParse(directAmtCtrl.text) ?? 0.0;
-            final disc = double.tryParse(discountCtrl.text) ?? 0.0;
-            final netAmt = (amt - disc).clamp(0.0, 9999999.0);
-
-            Future<void> processQuickSaleCheckout({bool shouldPrint = false}) async {
-              if (amt <= 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please enter a valid Sale Amount (₹)')),
-                );
-                return;
-              }
-
-              final name = custNameCtrl.text.trim();
-              final phone = custPhoneCtrl.text.trim();
-              final remark = remarkCtrl.text.trim().isNotEmpty ? remarkCtrl.text.trim() : 'General Medical Sale';
-
-              posProvider.resetCart();
-              posProvider.setCustomerName(name.isEmpty ? 'Walk-in Customer' : name);
-              posProvider.setCustomerPhone(phone);
-              posProvider.setDiscount(disc);
-              posProvider.setPaymentMode(selectedPaymentMode);
-
-              posProvider.addItemToCart(
-                name: remark,
-                batch: 'MANUAL',
-                expiry: 'N/A',
-                quantity: 1,
-                mrp: amt,
-                salePrice: amt,
-                category: 'Manual Quick Sale',
-              );
-
-              Navigator.pop(dialogCtx);
-              _triggerCheckout(posProvider, dashProvider, shouldPrint: shouldPrint);
-            }
-
-            return Dialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              backgroundColor: AppColors.surface,
-              child: Container(
-                width: 540,
-                padding: const EdgeInsets.all(20),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Header Title
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: AppColors.primary.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Icon(Icons.bolt, color: Colors.amber, size: 24),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: const [
-                                Text(
-                                  '⚡ Quick Manual Sale / Direct Bill',
-                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
-                                ),
-                                Text(
-                                  'Fast sale entry without searching inventory',
-                                  style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                                ),
-                              ],
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close, color: AppColors.textMuted),
-                            onPressed: () => Navigator.pop(dialogCtx),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      const Divider(height: 1),
-                      const SizedBox(height: 16),
-
-                      // Customer Info (Name & Phone)
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: custNameCtrl,
-                              decoration: const InputDecoration(
-                                labelText: 'Customer Name',
-                                hintText: 'Walk-in Customer',
-                                prefixIcon: Icon(Icons.person, size: 18),
-                                isDense: true,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: TextField(
-                              controller: custPhoneCtrl,
-                              keyboardType: TextInputType.phone,
-                              decoration: const InputDecoration(
-                                labelText: 'Customer Phone',
-                                hintText: '98765xxxxx',
-                                prefixIcon: Icon(Icons.phone, size: 18),
-                                isDense: true,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-
-                      // Direct Sale Amount & Remark Box
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.06),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  flex: 2,
-                                  child: TextField(
-                                    controller: directAmtCtrl,
-                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                    style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.primary, fontSize: 16),
-                                    autofocus: true,
-                                    onChanged: (val) => setDialogState(() {}),
-                                    decoration: const InputDecoration(
-                                      labelText: 'Direct Sale Amount (₹)*',
-                                      hintText: 'e.g. 500',
-                                      prefixIcon: Icon(Icons.currency_rupee, color: AppColors.primary),
-                                      isDense: true,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  flex: 3,
-                                  child: TextField(
-                                    controller: remarkCtrl,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Sale Description / Items',
-                                      hintText: 'General Medical Sale',
-                                      prefixIcon: Icon(Icons.edit_note),
-                                      isDense: true,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-
-                      // Discount & Payment Mode
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: discountCtrl,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              onChanged: (val) => setDialogState(() {}),
-                              decoration: const InputDecoration(
-                                labelText: 'Discount Deduction (₹)',
-                                prefixIcon: Icon(Icons.local_offer, size: 18),
-                                isDense: true,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: DropdownButtonFormField<String>(
-                              value: selectedPaymentMode,
-                              decoration: const InputDecoration(
-                                labelText: 'Payment Mode',
-                                prefixIcon: Icon(Icons.payment, size: 18),
-                                isDense: true,
-                              ),
-                              items: ['Cash', 'UPI', 'Card', 'Credit']
-                                  .map((m) => DropdownMenuItem(
-                                        value: m,
-                                        child: Text(m == 'Credit' ? 'Udhar (Credit)' : m, style: const TextStyle(fontSize: 13)),
-                                      ))
-                                  .toList(),
-                              onChanged: (val) {
-                                if (val != null) {
-                                  setDialogState(() => selectedPaymentMode = val);
-                                }
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 18),
-
-                      // Net Payable Tally Box
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF0F172A),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('Gross: ₹${amt.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white70, fontSize: 11)),
-                                Text('Discount: ₹${disc.toStringAsFixed(2)}', style: const TextStyle(color: Colors.redAccent, fontSize: 11)),
-                              ],
-                            ),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                const Text('NET PAYABLE AMOUNT', style: TextStyle(color: Colors.white54, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-                                Text(
-                                  '₹${netAmt.toStringAsFixed(2)}',
-                                  style: const TextStyle(color: Color(0xFF10B981), fontSize: 20, fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-
-                      // Action Buttons: Cancel | Save / Submit Bill | Save & Print
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          OutlinedButton(
-                            onPressed: () => Navigator.pop(dialogCtx),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                            ),
-                            child: const Text('Clear / Cancel'),
-                          ),
-                          const SizedBox(width: 10),
-                          ElevatedButton.icon(
-                            onPressed: () => processQuickSaleCheckout(shouldPrint: false),
-                            icon: const Icon(Icons.check_circle_outline, size: 16),
-                            label: const Text('Save / Submit Bill', style: TextStyle(fontWeight: FontWeight.bold)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primary,
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          ElevatedButton.icon(
-                            onPressed: () => processQuickSaleCheckout(shouldPrint: true),
-                            icon: const Icon(Icons.print, size: 16),
-                            label: const Text('Save & Print', style: TextStyle(fontWeight: FontWeight.bold)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF059669),
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
   }
 
   void _showAddManualItemDialog(BuildContext context, PosProvider posProvider) {
@@ -1173,59 +878,57 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // LEFT PANEL: Medicines Search & Details Form (Flex 5)
+          // LEFT / MAIN PANEL: Medicine Details Form + Cart Items Table (Flex 4 - Compact)
           Expanded(
-            flex: 5,
-            child: Stack(
-              clipBehavior: Clip.none,
+            flex: 4,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                // Top Pinned Card: Billing Item Details & Medicine Lookup
+                Stack(
+                  clipBehavior: Clip.none,
                   children: [
-                    // Pinned Search Card
                     CustomCard(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.all(14),
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Expanded(
-                                child: Text(
-                                  'Medicines Master Lookup',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold,
-                                    color: AppColors.primaryLight,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                              const Text(
+                                'Billing Item Details',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.primaryLight),
                               ),
                               TextButton.icon(
                                 onPressed: () => _showAddManualItemDialog(context, posProvider),
-                                icon: const Icon(Icons.add_circle, size: 14, color: AppColors.primary),
+                                icon: const Icon(Icons.add_circle, size: 15, color: AppColors.primary),
                                 label: const Text(
                                   'Add Manual Amount',
-                                  style: TextStyle(color: AppColors.primary, fontSize: 11, fontWeight: FontWeight.bold),
+                                  style: TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.bold),
                                 ),
                               ),
                             ],
                           ),
                           const SizedBox(height: 8),
+
+                          // Search & Medicine Name Input
                           TextField(
                             controller: _searchController,
                             focusNode: _searchFocusNode,
                             onChanged: posProvider.searchMedicines,
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                             decoration: InputDecoration(
+                              labelText: 'Medicine / Item Name (Type or Search brand/salt)',
                               hintText: 'Search brand name or salt composition...',
                               prefixIcon: const Icon(Icons.search, color: AppColors.primary, size: 20),
-                              contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                              contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
                               suffixIcon: _searchController.text.isNotEmpty
                                   ? IconButton(
                                       icon: const Icon(Icons.clear, color: AppColors.textSecondary, size: 18),
                                       onPressed: () {
                                         _searchController.clear();
+                                        _medicineNameController.clear();
                                         posProvider.searchMedicines('');
                                         setState(() {
                                           _selectedMasterMedicine = null;
@@ -1238,396 +941,248 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
                           ),
                           if (posProvider.isSearching)
                             const Padding(
-                              padding: EdgeInsets.only(top: 8.0),
-                              child: Center(child: CircularProgressIndicator()),
+                              padding: EdgeInsets.only(top: 6.0),
+                              child: Center(child: LinearProgressIndicator(minHeight: 2)),
                             ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 10),
 
-                    // Scrollable Details Card
-                    Expanded(
-                      child: CustomCard(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        child: SingleChildScrollView(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text(
-                                    'Billing Item Details',
-                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.primaryLight),
-                                  ),
-                                  if (_selectedMasterMedicine != null)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.primary.withValues(alpha: 0.2),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: const Text(
-                                        'Master Seed Match',
-                                        style: TextStyle(color: AppColors.primaryLight, fontSize: 11, fontWeight: FontWeight.bold),
-                                      ),
-                                    ),
-                                ],
+                          if (_selectedMasterMedicine != null) ...[
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: AppColors.primary.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
                               ),
-                              const SizedBox(height: 8),
-
-                              if (_selectedMasterMedicine != null) ...[
-                                Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.primary.withValues(alpha: 0.05),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.15)),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        'Selected: ${_selectedMasterMedicine!.medicineName}',
-                                        style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary, fontSize: 13),
-                                      ),
-                                      if (_selectedMasterMedicine!.composition != null) ...[
-                                        const SizedBox(height: 4),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.check_circle, color: AppColors.primary, size: 18),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
                                         Text(
-                                          'Salt: ${_selectedMasterMedicine!.composition}',
+                                          'Selected: ${_selectedMasterMedicine!.medicineName}',
+                                          style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary, fontSize: 13),
+                                        ),
+                                        Text(
+                                          'Salt: ${_selectedMasterMedicine!.composition ?? "N/A"} | Mfr: ${_selectedMasterMedicine!.manufacturer ?? "N/A"}',
                                           style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
                                         ),
                                       ],
-                                      if (_selectedMasterMedicine!.manufacturer != null) ...[
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          'Mfr: ${_selectedMasterMedicine!.manufacturer}',
-                                          style: const TextStyle(fontSize: 10, color: AppColors.textMuted),
-                                        ),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                                 const SizedBox(height: 8),
-                              ],
-
-                              // Manual / Selected Item Name Input
-                              TextField(
-                                controller: _medicineNameController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Medicine / Item Name (Type or Select)',
-                                  hintText: 'e.g. Paracetamol 500mg, Bandage, Syrup...',
-                                  prefixIcon: Icon(Icons.medication, size: 18, color: AppColors.primary),
-                                  contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-
-                              // Fields: Batch No, Expiry, Qty
-                              Row(
-                                children: [
-                                  Expanded(
-                                    flex: 2,
-                                    child: TextField(
-                                      controller: _batchController,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Batch Number',
-                                        hintText: 'e.g. BT-9382',
-                                        contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    flex: 2,
-                                    child: TextField(
-                                      controller: _expiryController,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Expiry Date',
-                                        hintText: 'YYYY-MM',
-                                        contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    flex: 1,
-                                    child: TextField(
-                                      controller: _qtyController,
-                                      focusNode: _qtyFocusNode,
-                                      keyboardType: TextInputType.number,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Quantity',
-                                        contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                      ),
                                     ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 10),
-                              // Fields: MRP, Sale Rate
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _mrpController,
-                                      focusNode: _mrpFocusNode,
-                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                      decoration: const InputDecoration(
-                                        labelText: 'MRP (₹)',
-                                        contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _priceController,
-                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                      decoration: const InputDecoration(
-                                        labelText: 'Sale Rate (₹)',
-                                        contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
+                            ),
+                          ],
+                          const SizedBox(height: 10),
 
-                              // Warnings Section (Low Stock / Expiring)
-                              if (_matchedInventoryItem != null) ...[
-                                const Text(
-                                  'Active Stock Intelligence Alerts:',
-                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppColors.textSecondary),
+                          // Item Attributes: Batch, Expiry, Qty, MRP, Sale Price
+                          Row(
+                            children: [
+                              Expanded(
+                                flex: 2,
+                                child: TextField(
+                                  controller: _batchController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Batch Number',
+                                    hintText: 'e.g. BT-9382',
+                                    contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+                                  ),
                                 ),
-                                const SizedBox(height: 6),
-                                if (showLowStockWarning)
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.warning.withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.warning, color: AppColors.warning, size: 18),
-                                        const SizedBox(width: 6),
-                                        Expanded(
-                                          child: Text(
-                                            'Low Stock: Only $currentStockCount pack(s) remaining.',
-                                            style: const TextStyle(color: AppColors.warning, fontWeight: FontWeight.w600, fontSize: 12),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                flex: 2,
+                                child: TextField(
+                                  controller: _expiryController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Expiry Date',
+                                    hintText: 'YYYY-MM',
+                                    contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
                                   ),
-                                if (showExpiryWarning) ...[
-                                  if (showLowStockWarning) const SizedBox(height: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.error.withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: AppColors.error.withValues(alpha: 0.4)),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.timer_sharp, color: AppColors.error, size: 18),
-                                        const SizedBox(width: 6),
-                                        Expanded(
-                                          child: Text(
-                                            'Expiry Alert: batch expiring soon (${_matchedInventoryItem!.expiryDate}).',
-                                            style: const TextStyle(color: AppColors.error, fontWeight: FontWeight.w600, fontSize: 12),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                flex: 1,
+                                child: TextField(
+                                  controller: _qtyController,
+                                  focusNode: _qtyFocusNode,
+                                  keyboardType: TextInputType.number,
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Qty',
+                                    contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
                                   ),
-                                ],
-                                if (!showLowStockWarning && !showExpiryWarning)
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.success.withValues(alpha: 0.1),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: AppColors.success.withValues(alpha: 0.3)),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.check_circle, color: AppColors.success, size: 18),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          'Stock Healthy: $currentStockCount pack(s) available.',
-                                          style: const TextStyle(color: AppColors.success, fontSize: 12, fontWeight: FontWeight.w600),
-                                        ),
-                                      ],
-                                    ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                flex: 2,
+                                child: TextField(
+                                  controller: _mrpController,
+                                  focusNode: _mrpFocusNode,
+                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                  decoration: const InputDecoration(
+                                    labelText: 'MRP (₹)',
+                                    contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
                                   ),
-                                const SizedBox(height: 10),
-                              ] else ...[
-                                const SizedBox(height: 10),
-                                if (_searchController.text.isNotEmpty)
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.info.withValues(alpha: 0.1),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: AppColors.info.withValues(alpha: 0.3)),
-                                    ),
-                                    child: Row(
-                                      children: const [
-                                        Icon(Icons.info, color: AppColors.info, size: 18),
-                                        SizedBox(width: 6),
-                                        Expanded(
-                                          child: Text(
-                                            'New stock will be registered in Firestore Inventory upon checkout.',
-                                            style: TextStyle(color: AppColors.info, fontSize: 12, fontWeight: FontWeight.w600),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                flex: 2,
+                                child: TextField(
+                                  controller: _priceController,
+                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.accent),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Sale Rate (₹)',
+                                    contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
                                   ),
-                                const SizedBox(height: 10),
-                              ],
-
-                              // Add to Cart Button
-                              ElevatedButton.icon(
-                                onPressed: () => _addItemToCart(posProvider),
-                                icon: const Icon(Icons.add_shopping_cart, size: 18),
-                                label: const Text('Add to Cart'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppColors.primary,
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
                                 ),
                               ),
                             ],
                           ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                          const SizedBox(height: 10),
 
-                // Floating Dropdown Overlay
-                if (_searchFocusNode.hasFocus &&
-                    !posProvider.isSearching &&
-                    _searchController.text.trim().isNotEmpty &&
-                    _selectedMasterMedicine == null)
-                  Positioned(
-                    top: 92, // Positioned exactly below search field
-                    left: 0,
-                    right: 0,
-                    child: Container(
-                      height: 220, // Max height as requested
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.border),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.2),
-                            blurRadius: 10,
-                            offset: const Offset(0, 5),
-                          )
+                          // Warnings & Intelligence
+                          if (_matchedInventoryItem != null) ...[
+                            if (showLowStockWarning)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: AppColors.warning.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text('⚠️ Low Stock Alert: Only $currentStockCount pack(s) remaining in stock.', style: const TextStyle(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.bold)),
+                              ),
+                            if (showExpiryWarning)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: AppColors.error.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text('🚨 Expiry Alert: Batch expiring soon (${_matchedInventoryItem!.expiryDate}).', style: const TextStyle(color: AppColors.error, fontSize: 12, fontWeight: FontWeight.bold)),
+                              ),
+                            const SizedBox(height: 8),
+                          ],
+
+                          // Add to Cart Action Button
+                          ElevatedButton.icon(
+                            onPressed: () => _addItemToCart(posProvider),
+                            icon: const Icon(Icons.add_shopping_cart, size: 18),
+                            label: const Text('Add to Cart', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                          ),
                         ],
                       ),
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: posProvider.searchResults.length + 1,
-                        separatorBuilder: (_, _) => const Divider(color: AppColors.border, height: 1),
-                        itemBuilder: (context, index) {
-                          final queryText = _searchController.text.trim();
-                          if (index == 0) {
-                            return ListTile(
-                              dense: true,
-                              leading: const Icon(Icons.add, color: AppColors.primaryLight, size: 20),
-                              title: Text(
-                                'Use "$queryText" manually',
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primaryLight),
-                              ),
-                              subtitle: const Text(
-                                'Tap to enter custom price/details manually',
-                                style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
-                              ),
-                              onTap: () {
-                                setState(() {
-                                  _selectedMasterMedicine = null;
-                                  _matchedInventoryItem = null;
-                                  
-                                  // Pre-fill defaults for convenience
-                                  _batchController.text = 'BATCH-${DateTime.now().year % 100}${DateTime.now().month}';
-                                  _expiryController.text = '${DateTime.now().year + 2}-${DateTime.now().month.toString().padLeft(2, '0')}';
-                                  _mrpController.clear();
-                                  _priceController.clear();
-                                });
-                                posProvider.searchMedicines('');
-                                _mrpFocusNode.requestFocus();
-                              },
-                            );
-                          }
-
-                          final med = posProvider.searchResults[index - 1];
-                          final hasStock = dashProvider.inventory.any(
-                            (item) => item.medicineName.toLowerCase() == med.medicineName.toLowerCase()
-                          );
-
-                          return ListTile(
-                            dense: true,
-                            title: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    med.medicineName,
-                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                                  ),
-                                ),
-                                if (hasStock)
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.success.withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: const Text(
-                                      'In Stock',
-                                      style: TextStyle(color: AppColors.success, fontSize: 9),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            subtitle: Text(
-                              'Composition: ${med.composition ?? "N/A"} | Manufacturer: ${med.manufacturer ?? "Unknown"}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
-                            ),
-                            trailing: Text(
-                              '₹${med.mrp.toStringAsFixed(2)}',
-                              style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold),
-                            ),
-                            onTap: () {
-                              _selectMedicine(med, dashProvider.inventory);
-                              posProvider.searchMedicines('');
-                            },
-                          );
-                        },
-                      ),
                     ),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 16),
 
-          // RIGHT PANEL: Cart & Billing Details (Flex 7)
-          Expanded(
-            flex: 7,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Table Listing Items added to Cart
+                    // Floating Search Dropdown Overlay
+                    if (_searchFocusNode.hasFocus &&
+                        !posProvider.isSearching &&
+                        _searchController.text.trim().isNotEmpty &&
+                        _selectedMasterMedicine == null)
+                      Positioned(
+                        top: 85,
+                        left: 14,
+                        right: 14,
+                        child: Container(
+                          height: 220,
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: AppColors.border),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.25),
+                                blurRadius: 10,
+                                offset: const Offset(0, 5),
+                              )
+                            ],
+                          ),
+                          child: ListView.separated(
+                            shrinkWrap: true,
+                            itemCount: posProvider.searchResults.length + 1,
+                            separatorBuilder: (_, _) => const Divider(color: AppColors.border, height: 1),
+                            itemBuilder: (context, index) {
+                              final queryText = _searchController.text.trim();
+                              if (index == 0) {
+                                return ListTile(
+                                  dense: true,
+                                  leading: const Icon(Icons.add, color: AppColors.primaryLight, size: 20),
+                                  title: Text(
+                                    'Use "$queryText" manually',
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primaryLight),
+                                  ),
+                                  subtitle: const Text('Tap to enter custom price/details manually', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                                  onTap: () {
+                                    setState(() {
+                                      _selectedMasterMedicine = null;
+                                      _matchedInventoryItem = null;
+                                      _medicineNameController.text = queryText;
+                                      _batchController.text = 'BATCH-${DateTime.now().year % 100}${DateTime.now().month}';
+                                      _expiryController.text = '${DateTime.now().year + 2}-${DateTime.now().month.toString().padLeft(2, '0')}';
+                                      _mrpController.clear();
+                                      _priceController.clear();
+                                    });
+                                    posProvider.searchMedicines('');
+                                    _mrpFocusNode.requestFocus();
+                                  },
+                                );
+                              }
+
+                              final med = posProvider.searchResults[index - 1];
+                              final hasStock = dashProvider.inventory.any(
+                                (item) => item.medicineName.toLowerCase() == med.medicineName.toLowerCase()
+                              );
+
+                              return ListTile(
+                                dense: true,
+                                title: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        med.medicineName,
+                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                      ),
+                                    ),
+                                    if (hasStock)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.success.withValues(alpha: 0.2),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: const Text('In Stock', style: TextStyle(color: AppColors.success, fontSize: 9, fontWeight: FontWeight.bold)),
+                                      ),
+                                  ],
+                                ),
+                                subtitle: Text('Composition: ${med.composition ?? "N/A"} | Manufacturer: ${med.manufacturer ?? "Unknown"}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                                trailing: Text('₹${med.mrp.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold)),
+                                onTap: () {
+                                  _selectMedicine(med, dashProvider.inventory);
+                                  posProvider.searchMedicines('');
+                                },
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // Bottom Cart Table Card (Under Billing Item Details)
                 Expanded(
                   child: CustomCard(
                     padding: EdgeInsets.zero,
@@ -1639,12 +1194,18 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Text(
-                                'Active Billing Receipt Cart',
-                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.primaryLight),
+                              Row(
+                                children: [
+                                  const Icon(Icons.shopping_cart, color: AppColors.primary, size: 20),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    'Active Billing Receipt Cart',
+                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.primaryLight),
+                                  ),
+                                ],
                               ),
                               Text(
-                                '${posProvider.cartItems.length} Item(s) Selected',
+                                '${posProvider.cartItems.length} Item(s) Added',
                                 style: const TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.bold, fontSize: 13),
                               )
                             ],
@@ -1657,12 +1218,12 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
                                   child: Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: const [
-                                      Icon(Icons.shopping_basket_outlined, size: 64, color: AppColors.textMuted),
-                                      SizedBox(height: 12),
+                                      Icon(Icons.shopping_basket_outlined, size: 54, color: AppColors.textMuted),
+                                      SizedBox(height: 10),
                                       Text(
-                                        'Your POS Cart is Empty.\nUse the left panel lookup to add items.',
+                                        'Your POS Cart is Empty.\nSearch or enter medicine details above and click "Add to Cart".',
                                         textAlign: TextAlign.center,
-                                        style: TextStyle(color: AppColors.textMuted, fontSize: 15),
+                                        style: TextStyle(color: AppColors.textMuted, fontSize: 14),
                                       )
                                     ],
                                   ),
@@ -1704,12 +1265,6 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
                                                       Text(
                                                         'Salt: ${item.substitutes}',
                                                         style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
-                                                        overflow: TextOverflow.ellipsis,
-                                                      ),
-                                                    if (item.category != null && item.category!.isNotEmpty)
-                                                      Text(
-                                                        'Mfr: ${item.category}',
-                                                        style: const TextStyle(fontSize: 10, color: AppColors.textMuted),
                                                         overflow: TextOverflow.ellipsis,
                                                       ),
                                                   ],
@@ -1759,207 +1314,272 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
 
-                // Customer Info and Checkout Calculations
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    CustomCard(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // Customer fields + payment mode
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: _custNameController,
-                                  focusNode: _custNameFocusNode,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Customer Name',
-                                    hintText: 'Walk-in Customer',
-                                    prefixIcon: Icon(Icons.person, size: 18, color: AppColors.textSecondary),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: TextField(
-                                  controller: _custPhoneController,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Customer Phone',
-                                    hintText: 'e.g. 98765xxxxx',
-                                    prefixIcon: Icon(Icons.phone, size: 18, color: AppColors.textSecondary),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-
-                          // Direct Quick Amount Entry (Bina Medicine Sale + Description)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: AppColors.primary.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+          // RIGHT PANEL: Customer Details & Checkout Sidebar (Flex 6 - MAIN & ENLARGED UI)
+          Expanded(
+            flex: 6,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                CustomCard(
+                  padding: const EdgeInsets.all(16),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Header
+                        Row(
+                          children: const [
+                            Icon(Icons.person_pin, color: AppColors.primary, size: 24),
+                            SizedBox(width: 8),
+                            Text(
+                              'Customer & Bill Checkout',
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
                             ),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.bolt, color: Colors.amber, size: 20),
-                                const SizedBox(width: 6),
-                                const Text(
-                                  'Direct Sale Amount:',
-                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppColors.primaryLight),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  flex: 2,
-                                  child: TextField(
-                                    controller: _directAmountController,
-                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                    style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.accent, fontSize: 13),
-                                    decoration: const InputDecoration(
-                                      hintText: 'Enter ₹ Amount...',
-                                      isDense: true,
-                                      prefixIcon: Icon(Icons.currency_rupee, size: 15, color: AppColors.accent),
-                                      contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  flex: 3,
-                                  child: TextField(
-                                    controller: _directRemarkController,
-                                    style: const TextStyle(fontSize: 12, color: AppColors.textPrimary),
-                                    decoration: const InputDecoration(
-                                      hintText: 'Description / Bought Items (e.g. Syrup, Bandage)...',
-                                      isDense: true,
-                                      prefixIcon: Icon(Icons.edit_note, size: 16, color: AppColors.primaryLight),
-                                      contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                ElevatedButton.icon(
-                                  onPressed: () => _addDirectAmountToCart(posProvider),
-                                  icon: const Icon(Icons.add, size: 14),
-                                  label: const Text('Add Amount', style: TextStyle(fontSize: 11)),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppColors.primary,
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Expanded(
-                                flex: 2,
-                                child: TextField(
-                                  controller: _discountController,
-                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                  decoration: const InputDecoration(
-                                    labelText: 'Discount (₹)',
-                                    prefixIcon: Icon(Icons.local_offer, size: 18, color: AppColors.textSecondary),
-                                  ),
-                                  onChanged: (val) {
-                                    posProvider.setDiscount(double.tryParse(val) ?? 0.0);
-                                  },
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: DropdownButtonFormField<double>(
-                                  value: posProvider.gstPercentage,
-                                  decoration: const InputDecoration(
-                                    labelText: 'GST Rate',
-                                    prefixIcon: Icon(Icons.percent, size: 18, color: AppColors.textSecondary),
-                                  ),
-                                  dropdownColor: AppColors.surface,
-                                  items: [0.0, 5.0, 12.0, 18.0, 28.0]
-                                      .map((rate) => DropdownMenuItem(
-                                            value: rate,
-                                            child: Text(rate == 0.0 ? 'Exempt (0%)' : 'GST ${rate.toStringAsFixed(0)}%', style: const TextStyle(fontSize: 13)),
-                                          ))
-                                      .toList(),
-                                  onChanged: (val) {
-                                    if (val != null) {
-                                      posProvider.setGstPercentage(val);
-                                    }
-                                  },
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: DropdownButtonFormField<String>(
-                                  initialValue: posProvider.paymentMode,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Payment Mode',
-                                    prefixIcon: Icon(Icons.payment, size: 18, color: AppColors.textSecondary),
-                                  ),
-                                  dropdownColor: AppColors.surface,
-                                  items: ['Cash', 'UPI', 'Card', 'Credit']
-                                      .map((mode) => DropdownMenuItem(
-                                            value: mode,
-                                            child: Text(mode == 'Credit' ? 'Udhar' : mode, style: const TextStyle(fontSize: 13)),
-                                          ))
-                                      .toList(),
-                                  onChanged: (val) {
-                                    if (val != null) {
-                                      posProvider.setPaymentMode(val);
-                                    }
-                                  },
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        const Text('Enter customer details manually and complete settlement', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                        const Divider(color: AppColors.border, height: 24),
 
-                          // Financial Tally Row
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        // Customer Details Section (ENLARGED)
+                        const Text('CUSTOMER INFORMATION', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryLight, letterSpacing: 0.5)),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _custNameController,
+                          focusNode: _custNameFocusNode,
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                          decoration: InputDecoration(
+                            labelText: 'Customer Name (Type or Select)',
+                            hintText: 'e.g. Rahul Sharma / Walk-in Customer',
+                            prefixIcon: const Icon(Icons.person, size: 20, color: AppColors.primary),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _custPhoneController,
+                          keyboardType: TextInputType.phone,
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                          decoration: InputDecoration(
+                            labelText: 'Customer Mobile Phone',
+                            hintText: 'Enter 10-digit phone number',
+                            prefixIcon: const Icon(Icons.phone, size: 20, color: AppColors.primary),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                        const Divider(color: AppColors.border, height: 24),
+
+                        // Direct Quick Amount Entry (ENLARGED)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
+                              Row(
+                                children: const [
+                                  Icon(Icons.bolt, color: Colors.amber, size: 20),
+                                  SizedBox(width: 6),
                                   Text(
-                                    'Gross: ₹${posProvider.totalAmount.toStringAsFixed(2)}  |  Disc: -₹${posProvider.discount.toStringAsFixed(2)}',
-                                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                                    'Direct Sale (Quick Amount)',
+                                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primaryLight),
                                   ),
-                                  const SizedBox(height: 2),
-                                  if (posProvider.gstAmount > 0)
-                                    Text(
-                                      'Taxable: ₹${posProvider.taxableAmount.toStringAsFixed(2)}  +  GST (${posProvider.gstPercentage.toStringAsFixed(0)}%): ₹${posProvider.gstAmount.toStringAsFixed(2)}',
-                                      style: const TextStyle(color: AppColors.primaryLight, fontSize: 12, fontWeight: FontWeight.w600),
-                                    )
-                                  else
-                                    Text(
-                                      'Taxable Net: ₹${posProvider.taxableAmount.toStringAsFixed(2)} (Tax Exempt)',
-                                      style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
-                                    ),
                                 ],
                               ),
-                              Column(
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    flex: 3,
+                                    child: TextField(
+                                      controller: _directAmountController,
+                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                      style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.accent, fontSize: 16),
+                                      decoration: InputDecoration(
+                                        hintText: 'Enter ₹ Amount',
+                                        prefixIcon: const Icon(Icons.currency_rupee, size: 18, color: AppColors.accent),
+                                        contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    flex: 4,
+                                    child: TextField(
+                                      controller: _directRemarkController,
+                                      style: const TextStyle(fontSize: 13),
+                                      decoration: InputDecoration(
+                                        hintText: 'Description / Item',
+                                        contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  onPressed: () => _addDirectAmountToCart(posProvider),
+                                  icon: const Icon(Icons.add_circle, size: 16),
+                                  label: const Text('Add Direct Amount to Cart', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.primary,
+                                    padding: const EdgeInsets.symmetric(vertical: 10),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Divider(color: AppColors.border, height: 24),
+
+                        // Settlement Details (ENLARGED DROPDOWNS & INPUTS)
+                        const Text('DISCOUNT & PAYMENT MODE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryLight, letterSpacing: 0.5)),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _discountController,
+                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                                decoration: InputDecoration(
+                                  labelText: 'Discount (₹)',
+                                  prefixIcon: const Icon(Icons.local_offer, size: 18, color: AppColors.textSecondary),
+                                  contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                onChanged: (val) {
+                                  posProvider.setDiscount(double.tryParse(val) ?? 0.0);
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: DropdownButtonFormField<double>(
+                                initialValue: posProvider.gstPercentage,
+                                style: const TextStyle(fontSize: 14, color: AppColors.textPrimary, fontWeight: FontWeight.bold),
+                                decoration: InputDecoration(
+                                  labelText: 'GST Rate',
+                                  prefixIcon: const Icon(Icons.percent, size: 18, color: AppColors.textSecondary),
+                                  contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                dropdownColor: AppColors.surface,
+                                items: [0.0, 5.0, 12.0, 18.0, 28.0]
+                                    .map((rate) => DropdownMenuItem(
+                                          value: rate,
+                                          child: Text(rate == 0.0 ? 'Exempt (0%)' : 'GST ${rate.toStringAsFixed(0)}%', style: const TextStyle(fontSize: 13)),
+                                        ))
+                                    .toList(),
+                                onChanged: (val) {
+                                  if (val != null) {
+                                    posProvider.setGstPercentage(val);
+                                  }
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<String>(
+                          initialValue: posProvider.paymentMode,
+                          style: const TextStyle(fontSize: 15, color: AppColors.textPrimary, fontWeight: FontWeight.bold),
+                          decoration: InputDecoration(
+                            labelText: 'Payment Mode',
+                            prefixIcon: const Icon(Icons.payment, size: 20, color: AppColors.primary),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          dropdownColor: AppColors.surface,
+                          items: ['Cash', 'UPI', 'Card', 'Credit']
+                              .map((mode) => DropdownMenuItem(
+                                    value: mode,
+                                    child: Text(mode == 'Credit' ? 'Udhar (Credit Customer Ledger)' : mode, style: const TextStyle(fontSize: 14)),
+                                  ))
+                              .toList(),
+                          onChanged: (val) {
+                            if (val != null) {
+                              posProvider.setPaymentMode(val);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Financial Tally Summary Box (ENLARGED)
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.15),
+                                blurRadius: 6,
+                                offset: const Offset(0, 3),
+                              )
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text('Subtotal / Gross:', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                                  Text('₹${posProvider.totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text('Discount Applied:', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                                  Text('-₹${posProvider.discount.toStringAsFixed(2)}', style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 14)),
+                                ],
+                              ),
+                              if (posProvider.gstAmount > 0) ...[
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text('GST (${posProvider.gstPercentage.toStringAsFixed(0)}%):', style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                                    Text('+₹${posProvider.gstAmount.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.primaryLight, fontWeight: FontWeight.bold, fontSize: 14)),
+                                  ],
+                                ),
+                              ],
+                              const Divider(color: AppColors.border, height: 16),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
-                                  const Text(
-                                    'NET PAYABLE AMOUNT',
-                                    style: TextStyle(color: AppColors.textSecondary, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: const [
+                                      Text('NET PAYABLE', style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                                      Text('FINAL AMOUNT', style: TextStyle(color: AppColors.primaryLight, fontSize: 12, fontWeight: FontWeight.w900)),
+                                    ],
                                   ),
                                   Text(
                                     '₹${posProvider.netAmount.toStringAsFixed(2)}',
                                     style: const TextStyle(
                                       color: AppColors.accent,
-                                      fontSize: 22,
+                                      fontSize: 26,
                                       fontWeight: FontWeight.w900,
                                     ),
                                   ),
@@ -1967,114 +1587,117 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 12),
+                        ),
+                        const SizedBox(height: 16),
 
-                                 Row(
-                            children: [
-                              Expanded(
-                                flex: 1,
-                                child: OutlinedButton(
-                                  onPressed: () {
-                                    posProvider.resetCart();
-                                    _custNameController.clear();
-                                    _custPhoneController.clear();
-                                    _discountController.text = '0';
-                                  },
-                                  style: OutlinedButton.styleFrom(
-                                    side: const BorderSide(color: AppColors.border),
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                  ),
-                                  child: const Text('Clear Bill', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                        // Action Checkout Buttons
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 1,
+                              child: OutlinedButton(
+                                onPressed: () {
+                                  posProvider.resetCart();
+                                  _custNameController.clear();
+                                  _custPhoneController.clear();
+                                  _discountController.text = '0';
+                                },
+                                style: OutlinedButton.styleFrom(
+                                  side: const BorderSide(color: AppColors.border),
+                                  padding: const EdgeInsets.symmetric(vertical: 14),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                ),
+                                child: const Text('Clear', style: TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              flex: 2,
+                              child: ElevatedButton.icon(
+                                onPressed: () => _triggerCheckout(posProvider, dashProvider, shouldPrint: false),
+                                icon: const Icon(Icons.check_circle_outline, size: 18),
+                                label: const Text('Save Bill', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.primary,
+                                  padding: const EdgeInsets.symmetric(vertical: 14),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: ElevatedButton.icon(
-                                  onPressed: () => _triggerCheckout(posProvider, dashProvider, shouldPrint: false),
-                                  icon: const Icon(Icons.check_circle_outline, size: 18),
-                                  label: const Text('Save / Submit Bill', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppColors.primary,
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                  ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              flex: 2,
+                              child: ElevatedButton.icon(
+                                onPressed: () => _triggerCheckout(posProvider, dashProvider, shouldPrint: true),
+                                icon: const Icon(Icons.print, size: 18),
+                                label: const Text('Save & Print', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.success,
+                                  padding: const EdgeInsets.symmetric(vertical: 14),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: ElevatedButton.icon(
-                                  onPressed: () => _triggerCheckout(posProvider, dashProvider, shouldPrint: true),
-                                  icon: const Icon(Icons.print, size: 18),
-                                  label: const Text('Save & Print', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppColors.success,
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Customer Search Autocomplete Overlay
+                if (_showCustomerSuggestions && _filteredCustomers.isNotEmpty)
+                  Positioned(
+                    top: 130,
+                    left: 16,
+                    right: 16,
+                    child: Container(
+                      constraints: const BoxConstraints(maxHeight: 180),
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.border),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.25),
+                            blurRadius: 10,
+                            offset: const Offset(0, 5),
+                          )
                         ],
                       ),
-                    ),
-                    if (_showCustomerSuggestions && _filteredCustomers.isNotEmpty)
-                      Positioned(
-                        top: 52, // Positioned exactly below the Customer Name field
-                        left: 12,
-                        width: 320, // Match width of name textfield
-                        child: Container(
-                          constraints: const BoxConstraints(maxHeight: 180),
-                          decoration: BoxDecoration(
-                            color: AppColors.surface,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: AppColors.border),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.25),
-                                blurRadius: 10,
-                                offset: const Offset(0, 5),
-                              )
-                            ],
-                          ),
-                          child: ListView.separated(
-                            shrinkWrap: true,
-                            itemCount: _filteredCustomers.length,
-                            separatorBuilder: (_, _) => const Divider(color: AppColors.border, height: 1),
-                            itemBuilder: (context, index) {
-                              final cust = _filteredCustomers[index];
-                              return ListTile(
-                                dense: true,
-                                leading: const CircleAvatar(
-                                  radius: 14,
-                                  backgroundColor: Color(0xFFE6F4EA),
-                                  child: Icon(Icons.person, size: 14, color: AppColors.primary),
-                                ),
-                                title: Text(
-                                  cust.name,
-                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
-                                ),
-                                subtitle: Text(
-                                  cust.phone,
-                                  style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                                ),
-                                trailing: cust.pendingBalance > 0
-                                    ? Text(
-                                        'Bal: ₹${cust.pendingBalance.toStringAsFixed(0)}',
-                                        style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 11),
-                                      )
-                                    : null,
-                                onTap: () => _selectCustomer(cust),
-                              );
-                            },
-                          ),
-                        ),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: _filteredCustomers.length,
+                        separatorBuilder: (_, _) => const Divider(color: AppColors.border, height: 1),
+                        itemBuilder: (context, index) {
+                          final cust = _filteredCustomers[index];
+                          return ListTile(
+                            dense: true,
+                            leading: const CircleAvatar(
+                              radius: 14,
+                              backgroundColor: Color(0xFFE6F4EA),
+                              child: Icon(Icons.person, size: 14, color: AppColors.primary),
+                            ),
+                            title: Text(
+                              cust.name,
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
+                            ),
+                            subtitle: Text(
+                              cust.phone,
+                              style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                            ),
+                            trailing: cust.pendingBalance > 0
+                                ? Text(
+                                    'Udhar: ₹${cust.pendingBalance.toStringAsFixed(0)}',
+                                    style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 11),
+                                  )
+                                : null,
+                            onTap: () => _selectCustomer(cust),
+                          );
+                        },
                       ),
-                  ],
-                ),
+                    ),
+                  ),
               ],
             ),
           ),

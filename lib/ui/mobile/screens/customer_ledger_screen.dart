@@ -130,15 +130,8 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                 return;
               }
 
-              await provider.collectCustomerPayment(customer.id!, amount);
-              if (!context.mounted) return;
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: AppColors.success,
-                  content: Text('✓ ₹$amount payment collected successfully from ${customer.name}.'),
-                ),
-              );
+              await provider.collectCustomerPayment(customer.id!, amount);
             },
           ),
         ],
@@ -252,15 +245,8 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                 return;
               }
 
-              await provider.addCustomerCredit(customer, amount, note: note);
-              if (!context.mounted) return;
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: Colors.redAccent,
-                  content: Text('✓ ₹$amount Udhar added for ${customer.name}. New Total: ₹${(customer.pendingBalance + amount).toStringAsFixed(2)}'),
-                ),
-              );
+              await provider.addCustomerCredit(customer, amount, note: note);
             },
           ),
         ],
@@ -437,16 +423,16 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
               final contact = _supContactController.text.trim();
               final gstin = _supGstinController.text.trim();
 
-              if (name.isEmpty || contact.isEmpty) {
+              if (name.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please enter supplier name and contact number')),
+                  const SnackBar(content: Text('Please enter supplier agency name')),
                 );
                 return;
               }
 
               final success = await provider.addSupplier(SupplierModel(
                 name: name,
-                contact: contact,
+                contact: contact.isEmpty ? 'N/A' : contact,
                 gstin: gstin.isEmpty ? null : gstin,
                 due: 0.0,
               ));
@@ -612,22 +598,21 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
 
                     final refNo = refController.text.trim();
                     final remarks = remarksController.text.trim();
+                    final targetId = (supplier.id != null && supplier.id!.isNotEmpty) ? supplier.id! : supplier.name;
+                    final shouldPrint = printReceipt;
+
+                    // Close dialog immediately for instant UI feedback
+                    Navigator.pop(ctx);
+
                     final voucher = await provider.paySupplier(
-                      supplier.id!,
+                      targetId,
                       amt,
                       paymentMode: selectedMode,
                       referenceNumber: refNo,
                       remarks: remarks,
                     );
 
-                    Navigator.pop(ctx);
-                    if (!context.mounted) return;
-
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(backgroundColor: AppColors.success, content: Text('✅ Paid ₹${amt.toStringAsFixed(2)} to ${supplier.name}!')),
-                    );
-
-                    if (printReceipt && voucher != null) {
+                    if (shouldPrint && voucher != null) {
                       final remBal = (supplier.due - amt).clamp(0.0, 9999999.0);
                       final pdfBytes = await PdfService.generatePaymentReceiptPdf(
                         voucherNumber: voucher.voucherNumber,
@@ -653,6 +638,427 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                   label: const Text('Confirm Payment'),
                 ),
               ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _addSupplierPurchaseDialog(BuildContext context, SupplierModel supplier, DashboardProvider provider) {
+    final amountController = TextEditingController();
+    final billNoController = TextEditingController();
+    final remarksController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        backgroundColor: AppColors.background,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.green.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.add_shopping_cart, color: Colors.green),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(supplier.name, style: const TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Text('Add Purchase Bill (Stock Received)', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.green.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.green.withValues(alpha: 0.2)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Current Pending Due:', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                    Text(
+                      '₹${supplier.due.toStringAsFixed(2)}',
+                      style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: amountController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                autofocus: true,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                decoration: InputDecoration(
+                  labelText: 'Stock Bill Amount (₹)',
+                  labelStyle: const TextStyle(fontSize: 13),
+                  prefixIcon: const Icon(Icons.currency_rupee, color: Colors.green),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: billNoController,
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  labelText: 'Invoice / Bill Number (Optional)',
+                  hintText: 'e.g. INV-9981',
+                  hintStyle: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+                  labelStyle: const TextStyle(fontSize: 13),
+                  prefixIcon: const Icon(Icons.numbers, color: Colors.blue),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: remarksController,
+                style: const TextStyle(fontSize: 13),
+                maxLines: 2,
+                decoration: InputDecoration(
+                  labelText: 'Remarks / Item Details (Optional)',
+                  hintText: 'e.g. Cipla stock batch 2026',
+                  hintStyle: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+                  labelStyle: const TextStyle(fontSize: 13),
+                  prefixIcon: const Icon(Icons.notes, color: AppColors.primaryLight),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary)),
+            onPressed: () => Navigator.pop(context),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.add_circle_outline, size: 16),
+            label: const Text('Record Purchase Bill'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green.shade700,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            ),
+            onPressed: () async {
+              final amount = double.tryParse(amountController.text) ?? 0.0;
+              final billNo = billNoController.text.trim();
+              final remarks = remarksController.text.trim();
+              if (amount <= 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter a valid purchase bill amount')),
+                );
+                return;
+              }
+
+              Navigator.pop(context);
+              final targetId = (supplier.id != null && supplier.id!.isNotEmpty) ? supplier.id! : supplier.name;
+              await provider.addSupplierPurchase(
+                targetId,
+                amount,
+                billNumber: billNo,
+                remarks: remarks,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSupplierLedgerDialog(BuildContext context, SupplierModel supplier, DashboardProvider provider) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final latestSup = provider.suppliers.firstWhere(
+              (s) => s.id == supplier.id || s.name.toLowerCase() == supplier.name.toLowerCase(),
+              orElse: () => supplier,
+            );
+
+            final supplierVouchers = provider.vouchers.where((v) =>
+              (v.partyName.trim().toLowerCase() == latestSup.name.trim().toLowerCase()) ||
+              (latestSup.contact.isNotEmpty && v.partyPhone == latestSup.contact)
+            ).toList();
+
+            supplierVouchers.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              decoration: const BoxDecoration(
+                color: AppColors.background,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+              ),
+              child: Column(
+                children: [
+                  // Handle & Header
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: const BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+                    ),
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: AppColors.textMuted.withValues(alpha: 0.3),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 20,
+                              backgroundColor: Colors.blue.withValues(alpha: 0.15),
+                              child: Text(
+                                latestSup.name.isNotEmpty ? latestSup.name[0].toUpperCase() : 'S',
+                                style: TextStyle(color: Colors.blue.shade800, fontWeight: FontWeight.bold, fontSize: 16),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(latestSup.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: AppColors.textPrimary)),
+                                  Text('📱 ${latestSup.contact}${latestSup.gstin != null && latestSup.gstin!.isNotEmpty ? ' | GSTIN: ${latestSup.gstin}' : ''}', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close, color: AppColors.textSecondary),
+                              onPressed: () => Navigator.pop(context),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Content Body
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Summary Card
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                            decoration: BoxDecoration(
+                              gradient: latestSup.due > 0
+                                  ? LinearGradient(colors: [Colors.blue.shade900.withValues(alpha: 0.3), Colors.blue.shade800.withValues(alpha: 0.1)])
+                                  : LinearGradient(colors: [Colors.green.shade900.withValues(alpha: 0.3), Colors.green.shade800.withValues(alpha: 0.1)]),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: latestSup.due > 0 ? Colors.blue.shade400 : AppColors.success.withValues(alpha: 0.4),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'TOTAL PENDING AGENCY DUE',
+                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8, color: Colors.white70),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      latestSup.due > 0 ? 'Payable to Supplier' : 'No Outstanding Balance',
+                                      style: TextStyle(fontSize: 11, color: latestSup.due > 0 ? Colors.blue.shade200 : Colors.green.shade200),
+                                    ),
+                                  ],
+                                ),
+                                Text(
+                                  '₹${latestSup.due.toStringAsFixed(2)}',
+                                  style: TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w900,
+                                    color: latestSup.due > 0 ? Colors.blue.shade300 : AppColors.success,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Agency Voucher History',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary),
+                              ),
+                              Text('${supplierVouchers.length} Vouchers', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+
+                          // Vouchers List
+                          Expanded(
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: AppColors.surface,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: AppColors.border),
+                              ),
+                              child: supplierVouchers.isEmpty
+                                  ? const Center(
+                                      child: Text('No transaction vouchers logged for this agency.', style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+                                    )
+                                  : ListView.separated(
+                                      padding: const EdgeInsets.all(12),
+                                      itemCount: supplierVouchers.length,
+                                      separatorBuilder: (_, _) => const Divider(color: AppColors.border, height: 1),
+                                      itemBuilder: (context, idx) {
+                                        final v = supplierVouchers[idx];
+                                        final isPurchase = v.type == 'PURCHASE';
+                                        final formattedDate = DateFormat('dd MMM yyyy, hh:mm a').format(v.createdAt);
+
+                                        return Padding(
+                                          padding: const EdgeInsets.symmetric(vertical: 8.0),
+                                          child: Row(
+                                            children: [
+                                              Container(
+                                                padding: const EdgeInsets.all(8),
+                                                decoration: BoxDecoration(
+                                                  color: isPurchase
+                                                      ? Colors.green.withValues(alpha: 0.15)
+                                                      : Colors.orange.withValues(alpha: 0.15),
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: Icon(
+                                                  isPurchase ? Icons.add_shopping_cart : Icons.call_made,
+                                                  color: isPurchase ? Colors.green : Colors.orange,
+                                                  size: 18,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      isPurchase ? 'PURCHASE BILL (${v.voucherNumber})' : 'PAYMENT OUT (${v.paymentMode})',
+                                                      style: TextStyle(
+                                                        fontWeight: FontWeight.bold,
+                                                        fontSize: 13,
+                                                        color: isPurchase ? Colors.green.shade800 : Colors.orange.shade800,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 2),
+                                                    Text(
+                                                      v.remarks.isNotEmpty ? v.remarks : formattedDate,
+                                                      style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              Column(
+                                                crossAxisAlignment: CrossAxisAlignment.end,
+                                                children: [
+                                                  Text(
+                                                    '${isPurchase ? '+' : '-'} ₹${v.amount.toStringAsFixed(2)}',
+                                                    style: TextStyle(
+                                                      fontWeight: FontWeight.bold,
+                                                      fontSize: 14,
+                                                      color: isPurchase ? Colors.green.shade700 : Colors.orange.shade800,
+                                                    ),
+                                                  ),
+                                                  Text(
+                                                    formattedDate,
+                                                    style: const TextStyle(fontSize: 10, color: AppColors.textMuted),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // Bottom Dual Action Bar inside Supplier History Modal
+                  Container(
+                    padding: EdgeInsets.only(
+                      left: 16,
+                      right: 16,
+                      top: 12,
+                      bottom: MediaQuery.of(context).padding.bottom + 12,
+                    ),
+                    decoration: const BoxDecoration(
+                      color: AppColors.surface,
+                      border: Border(top: BorderSide(color: AppColors.border)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              _addSupplierPurchaseDialog(context, latestSup, provider);
+                            },
+                            icon: const Icon(Icons.add_shopping_cart, size: 16),
+                            label: const Text('+ Purchase Bill'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green.shade700,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              _paySupplierDialog(context, latestSup, provider);
+                            },
+                            icon: const Icon(Icons.call_made, size: 16),
+                            label: const Text('Pay Agency'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.blue.shade700,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             );
           },
         );
@@ -1445,118 +1851,105 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                       ),
                       boxShadow: AppColors.softShadow,
                     ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(14.0),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 42,
-                            height: 42,
-                            decoration: BoxDecoration(
-                              color: Colors.blue.withValues(alpha: 0.15),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Center(
-                              child: Text(
-                                supplier.name.isNotEmpty ? supplier.name[0].toUpperCase() : 'S',
-                                style: TextStyle(
-                                  color: Colors.blue.shade800,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
+                    child: InkWell(
+                      onTap: () => _showSupplierLedgerDialog(context, supplier, dashProvider),
+                      borderRadius: BorderRadius.circular(16),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14.0),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: Colors.blue.withValues(alpha: 0.15),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  supplier.name.isNotEmpty ? supplier.name[0].toUpperCase() : 'S',
+                                  style: TextStyle(
+                                    color: Colors.blue.shade800,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  supplier.name,
-                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '📱 ${supplier.contact}',
-                                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
-                                ),
-                                if (supplier.gstin != null && supplier.gstin!.isNotEmpty) ...[
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    supplier.name,
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary),
+                                  ),
                                   const SizedBox(height: 2),
                                   Text(
-                                    'GSTIN: ${supplier.gstin}',
-                                    style: const TextStyle(color: AppColors.textMuted, fontSize: 10, fontWeight: FontWeight.bold),
+                                    '📱 ${supplier.contact}',
+                                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
                                   ),
+                                  if (supplier.gstin != null && supplier.gstin!.isNotEmpty) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      'GSTIN: ${supplier.gstin}',
+                                      style: const TextStyle(color: AppColors.textMuted, fontSize: 10, fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
                                 ],
+                              ),
+                            ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  '₹${supplier.due.toStringAsFixed(2)}',
+                                  style: TextStyle(
+                                    color: hasDue ? Colors.blue.shade700 : AppColors.primaryDark,
+                                    fontWeight: FontWeight.w900,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.delete_outline, color: AppColors.error, size: 18),
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(),
+                                      onPressed: () {
+                                        showDialog(
+                                          context: context,
+                                          builder: (ctx) => AlertDialog(
+                                            title: const Text('Delete Supplier?'),
+                                            content: Text('Remove wholesale supplier agency ${supplier.name}?'),
+                                            actions: [
+                                              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                                              ElevatedButton(
+                                                style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
+                                                onPressed: () {
+                                                  if (supplier.id != null) {
+                                                    dashProvider.deleteSupplier(supplier.id!);
+                                                  }
+                                                  Navigator.pop(ctx);
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(content: Text('Supplier ${supplier.name} removed.')),
+                                                  );
+                                                },
+                                                child: const Text('Delete'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ],
+                                ),
                               ],
                             ),
-                          ),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text(
-                                '₹${supplier.due.toStringAsFixed(2)}',
-                                style: TextStyle(
-                                  color: hasDue ? Colors.blue.shade700 : AppColors.primaryDark,
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 15,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  if (hasDue) ...[
-                                    InkWell(
-                                      onTap: () => _paySupplierDialog(context, supplier, dashProvider),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: Colors.blue.shade700,
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: const Text(
-                                          'Pay Supplier',
-                                          style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                  ],
-                                  IconButton(
-                                    icon: const Icon(Icons.delete_outline, color: AppColors.error, size: 18),
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints(),
-                                    onPressed: () {
-                                      showDialog(
-                                        context: context,
-                                        builder: (ctx) => AlertDialog(
-                                          title: const Text('Delete Supplier?'),
-                                          content: Text('Remove wholesale supplier agency ${supplier.name}?'),
-                                          actions: [
-                                            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                                            ElevatedButton(
-                                              style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
-                                              onPressed: () {
-                                                if (supplier.id != null) {
-                                                  dashProvider.deleteSupplier(supplier.id!);
-                                                }
-                                                Navigator.pop(ctx);
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  SnackBar(content: Text('Supplier ${supplier.name} removed.')),
-                                                );
-                                              },
-                                              child: const Text('Delete'),
-                                            ),
-                                          ],
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   );

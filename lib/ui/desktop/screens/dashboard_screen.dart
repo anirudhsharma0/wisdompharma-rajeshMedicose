@@ -6,7 +6,6 @@ import '../../../core/constants/colors.dart';
 import '../../../data/models/bill_model.dart';
 import '../../../providers/dashboard_provider.dart';
 import '../../common/widgets/custom_card.dart';
-import 'pos_billing_screen.dart';
 
 class DashboardScreen extends StatelessWidget {
   final Function(int) onNavigate;
@@ -33,10 +32,10 @@ class DashboardScreen extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // TOP QUICK ACTION HEADER BAR
+          // TOP WELCOME BANNER
           Container(
             margin: const EdgeInsets.only(bottom: 20),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
                 colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
@@ -52,76 +51,49 @@ class DashboardScreen extends StatelessWidget {
             ),
             child: Row(
               children: [
-                // Title Icon
                 Container(
-                  padding: const EdgeInsets.all(10),
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: const Color(0xFF10B981).withValues(alpha: 0.2),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.bolt, color: Color(0xFF10B981), size: 22),
+                  child: const Icon(Icons.storefront_rounded, color: Color(0xFF10B981), size: 26),
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
-                    children: const [
+                    children: [
                       Text(
-                        'Quick Operations Launcher',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                        'Welcome to ${dashProvider.pharmacyName} 👋',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
                       ),
-                      SizedBox(height: 2),
+                      const SizedBox(height: 4),
                       Text(
-                        'Fast one-click shortcuts for billing, purchases, and customer management',
-                        style: TextStyle(color: Colors.white70, fontSize: 11),
+                        'Pharmacy Management & Business Analytics Overview',
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 16),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+                  ),
                   child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Action 1: + New POS Bill
-                      ElevatedButton.icon(
-                        onPressed: () => onNavigate(1),
-                        icon: const Icon(Icons.add_shopping_cart, size: 16),
-                        label: const Text('+ New POS Bill', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF10B981),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      // Action 2: + Add Purchase Bill
-                      ElevatedButton.icon(
-                        onPressed: () => onNavigate(2),
-                        icon: const Icon(Icons.post_add, size: 16),
-                        label: const Text('+ Add Purchase Bill', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF3B82F6),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      // Action 3: + Add Customer (Khata)
-                      ElevatedButton.icon(
-                        onPressed: () => onNavigate(4),
-                        icon: const Icon(Icons.person_add_alt_1, size: 16),
-                        label: const Text('+ Add Customer (Khata)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF0D9488),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
+                      const Icon(Icons.calendar_today, color: Color(0xFF10B981), size: 14),
+                      const SizedBox(width: 8),
+                      Text(
+                        DateFormat('EEEE, dd MMMM yyyy').format(DateTime.now()),
+                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500),
                       ),
                     ],
                   ),

@@ -227,12 +227,12 @@ class _DesktopLayoutState extends State<DesktopLayout> {
 
                               // 2. Customers / Khata Ledger Group
                               _buildExpandableGroup(
-                                title: 'Customers (Khata)',
+                                title: 'Khata Ledger & Parties',
                                 icon: Icons.people_alt_outlined,
                                 groupKey: 'Parties',
                                 children: [
-                                  _buildSubTile('Customer Directory', 4),
-                                  _buildSubTile('Khata Statements', 4),
+                                  _buildSubTile('Customer Khata', 4),
+                                  _buildSubTile('Wholesale Khata', 5),
                                 ],
                               ),
 
@@ -245,7 +245,6 @@ class _DesktopLayoutState extends State<DesktopLayout> {
                                   _buildSubTile('Stock Inventory', 3),
                                   _buildSubTile('Medicines Master DB', 6),
                                   _buildSubTile('Expiry Management', 7),
-                                  _buildSubTile('Suppliers Directory', 5),
                                 ],
                               ),
 
@@ -556,18 +555,4 @@ class _DesktopLayoutState extends State<DesktopLayout> {
       ),
     );
   }
-}
-
-class _GlobalSearchResult {
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final int targetScreenIndex;
-
-  _GlobalSearchResult({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.targetScreenIndex,
-  });
 }

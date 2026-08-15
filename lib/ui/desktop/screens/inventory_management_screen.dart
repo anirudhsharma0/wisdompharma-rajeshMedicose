@@ -598,7 +598,7 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
                       ),
                       const SizedBox(height: 16),
                       Container(
-                        padding: const EdgeInsets.all(14),
+                        padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
                           color: AppColors.primary.withValues(alpha: 0.05),
                           borderRadius: BorderRadius.circular(12),
@@ -611,44 +611,89 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
                               children: const [
                                 Icon(Icons.receipt_long, color: AppColors.primary, size: 20),
                                 SizedBox(width: 8),
-                                Text(
-                                  'Wholesale Payment Settle & Receipt (Optional)',
-                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.primary),
+                                Expanded(
+                                  child: Text(
+                                    'Wholesale Payment Settle & Receipt (Optional)',
+                                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.primary),
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                  ),
                                 ),
                               ],
                             ),
                             const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: _paidAmountController,
-                                    keyboardType: TextInputType.number,
-                                    decoration: InputDecoration(
-                                      labelText: 'Amount Paid Now (₹)',
-                                      hintText: 'e.g. 5000',
-                                      prefixIcon: const Icon(Icons.payment, size: 18),
-                                      fillColor: Colors.white,
-                                      filled: true,
-                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                final isNarrow = constraints.maxWidth < 320;
+                                if (isNarrow) {
+                                  return Column(
+                                    children: [
+                                      TextFormField(
+                                        controller: _paidAmountController,
+                                        keyboardType: TextInputType.number,
+                                        decoration: InputDecoration(
+                                          isDense: true,
+                                          labelText: 'Amount Paid Now (₹)',
+                                          hintText: 'e.g. 5000',
+                                          prefixIcon: const Icon(Icons.payment, size: 18),
+                                          fillColor: Colors.white,
+                                          filled: true,
+                                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      TextFormField(
+                                        controller: _receiptNoController,
+                                        decoration: InputDecoration(
+                                          isDense: true,
+                                          labelText: 'Receipt Slip No.',
+                                          hintText: 'e.g. 27822',
+                                          prefixIcon: const Icon(Icons.receipt, size: 18),
+                                          fillColor: Colors.white,
+                                          filled: true,
+                                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }
+                                return Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextFormField(
+                                        controller: _paidAmountController,
+                                        keyboardType: TextInputType.number,
+                                        decoration: InputDecoration(
+                                          isDense: true,
+                                          labelText: 'Amount Paid Now (₹)',
+                                          hintText: 'e.g. 5000',
+                                          prefixIcon: const Icon(Icons.payment, size: 18),
+                                          fillColor: Colors.white,
+                                          filled: true,
+                                          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: _receiptNoController,
-                                    decoration: InputDecoration(
-                                      labelText: 'Receipt Slip No.',
-                                      hintText: 'e.g. 27822',
-                                      prefixIcon: const Icon(Icons.receipt, size: 18),
-                                      fillColor: Colors.white,
-                                      filled: true,
-                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: TextFormField(
+                                        controller: _receiptNoController,
+                                        decoration: InputDecoration(
+                                          isDense: true,
+                                          labelText: 'Receipt Slip No.',
+                                          hintText: 'e.g. 27822',
+                                          prefixIcon: const Icon(Icons.receipt, size: 18),
+                                          fillColor: Colors.white,
+                                          filled: true,
+                                          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                ),
-                              ],
+                                  ],
+                                );
+                              },
                             ),
                             const SizedBox(height: 12),
                             DropdownButtonFormField<String>(

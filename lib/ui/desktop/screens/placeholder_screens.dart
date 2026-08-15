@@ -5,8 +5,8 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../../core/constants/colors.dart';
 import '../../../providers/dashboard_provider.dart';
-import '../../../data/models/customer_model.dart';
 import '../../../data/models/supplier_model.dart';
+import '../../../data/models/inventory_model.dart';
 import '../../../data/models/medicine_master_model.dart';
 import '../../../data/services/sqlite_service.dart';
 import '../../../data/services/pdf_service.dart';
@@ -15,521 +15,7 @@ import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import '../../common/widgets/custom_card.dart';
 
-// ================= 1. CUSTOMERS SCREEN =================
-class CustomersScreen extends StatefulWidget {
-  const CustomersScreen({super.key});
-
-  @override
-  State<CustomersScreen> createState() => _CustomersScreenState();
-}
-
-class _CustomersScreenState extends State<CustomersScreen> {
-  final _nameController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _searchController = TextEditingController();
-  String _searchQuery = '';
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _phoneController.dispose();
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  void _showAddCustomerDialog(BuildContext context, DashboardProvider provider) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add New Customer', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Customer Name', hintText: 'Enter name'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _phoneController,
-              decoration: const InputDecoration(labelText: 'Phone Number', hintText: 'Enter 10-digit number'),
-              keyboardType: TextInputType.phone,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              if (_nameController.text.isNotEmpty && _phoneController.text.isNotEmpty) {
-                final success = await provider.addCustomer(CustomerModel(
-                  name: _nameController.text,
-                  phone: _phoneController.text,
-                  pendingBalance: 0.0,
-                ));
-
-                if (!context.mounted) return;
-                if (!success) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      backgroundColor: AppColors.error,
-                      content: Text('⚠️ Customer already registered with exact same name "${_nameController.text}" and phone "${_phoneController.text}"!'),
-                    ),
-                  );
-                  return;
-                }
-
-                _nameController.clear();
-                _phoneController.clear();
-                if (!context.mounted) return;
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    backgroundColor: AppColors.success,
-                    content: Text('✓ Customer created successfully.'),
-                  ),
-                );
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showCustomerLedgerDialog(BuildContext context, CustomerModel customer, DashboardProvider provider) {
-    final TextEditingController amountController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            // Re-fetch customer dynamically to show updated balance
-            final latestCust = provider.customers.firstWhere(
-              (c) => (customer.phone.isNotEmpty && c.phone == customer.phone) || c.name.toLowerCase() == customer.name.toLowerCase(),
-              orElse: () => customer,
-            );
-
-            final customerBills = provider.bills.where((b) =>
-              (latestCust.phone.isNotEmpty && b.customerPhone == latestCust.phone) ||
-              (b.customerName.trim().toLowerCase() == latestCust.name.trim().toLowerCase())
-            ).toList();
-
-            final customerPayments = provider.customerPayments.where((p) =>
-              p.customerId == latestCust.id ||
-              (latestCust.phone.isNotEmpty && p.customerPhone == latestCust.phone) ||
-              (p.customerName.trim().toLowerCase() == latestCust.name.trim().toLowerCase())
-            ).toList();
-
-            List<Map<String, dynamic>> txs = [];
-            for (var bill in customerBills) {
-              txs.add({
-                'type': 'BILL',
-                'ref': bill.billNumber,
-                'amount': bill.netAmount,
-                'date': bill.createdAt,
-                'details': bill.items.map((e) => '${e.medicineName} (${e.quantity})').join(', '),
-              });
-            }
-            for (var pay in customerPayments) {
-              txs.add({
-                'type': 'PAYMENT',
-                'ref': 'PAY-${pay.createdAt.millisecondsSinceEpoch.toString().substring(8)}',
-                'amount': pay.amountPaid,
-                'date': pay.createdAt,
-                'details': 'Cash/UPI Payment Received',
-              });
-            }
-            txs.sort((a, b) => (b['date'] as DateTime).compareTo(a['date'] as DateTime));
-
-            return AlertDialog(
-              backgroundColor: AppColors.background,
-              title: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(latestCust.name, style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                        Text('Phone: ${latestCust.phone}', style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                      ],
-                    ),
-                  ),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      final dash = Provider.of<DashboardProvider>(context, listen: false);
-                      PdfService.generateAndShareCustomerStatement(
-                        latestCust,
-                        txs,
-                        pharmacyName: dash.pharmacyName,
-                        storeAddress: dash.storeAddress,
-                      );
-                    },
-                    icon: const Icon(Icons.share, size: 16),
-                    label: const Text('Share Statement PDF', style: TextStyle(fontSize: 12)),
-                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: AppColors.textSecondary),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-              content: SizedBox(
-                width: 700,
-                height: 520,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Outstanding Balance Card
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: latestCust.pendingBalance > 0
-                            ? Colors.red.withValues(alpha: 0.08)
-                            : Colors.green.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: latestCust.pendingBalance > 0
-                              ? Colors.red.withValues(alpha: 0.2)
-                              : Colors.green.withValues(alpha: 0.2),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: const [
-                              Text(
-                                'TOTAL OUTSTANDING (UDHAR) BALANCE',
-                                style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.5, color: AppColors.textSecondary),
-                              ),
-                              SizedBox(height: 4),
-                              Text('Ledger balance sheet', style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
-                            ],
-                          ),
-                          Text(
-                            '₹${latestCust.pendingBalance.toStringAsFixed(2)}',
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w900,
-                              color: latestCust.pendingBalance > 0 ? Colors.redAccent : Colors.green,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Transaction History (Bills & Payments)',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary),
-                    ),
-                    const SizedBox(height: 8),
-
-                    // Ledger Timeline List
-                    Expanded(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: AppColors.surface,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppColors.border),
-                        ),
-                        child: txs.isEmpty
-                            ? const Center(child: Text('No transactions recorded yet.', style: TextStyle(color: AppColors.textSecondary)))
-                            : ListView.separated(
-                                padding: const EdgeInsets.all(12),
-                                itemCount: txs.length,
-                                separatorBuilder: (_, _) => const Divider(color: AppColors.border, height: 1),
-                                itemBuilder: (context, idx) {
-                                  final tx = txs[idx];
-                                  final isBill = tx['type'] == 'BILL';
-                                  final formattedDate = DateFormat('dd MMM yyyy, hh:mm a').format(tx['date'] as DateTime);
-
-                                  return Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 8.0),
-                                    child: Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        CircleAvatar(
-                                          radius: 16,
-                                          backgroundColor: isBill ? Colors.red.withValues(alpha: 0.1) : Colors.green.withValues(alpha: 0.1),
-                                          child: Icon(
-                                            isBill ? Icons.arrow_outward : Icons.call_received,
-                                            size: 16,
-                                            color: isBill ? Colors.redAccent : Colors.green,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Row(
-                                                children: [
-                                                  Container(
-                                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                                    decoration: BoxDecoration(
-                                                      color: isBill ? Colors.red.withValues(alpha: 0.1) : Colors.green.withValues(alpha: 0.1),
-                                                      borderRadius: BorderRadius.circular(4),
-                                                    ),
-                                                    child: Text(
-                                                      isBill ? 'BILL' : 'PAYMENT',
-                                                      style: TextStyle(
-                                                        fontSize: 9,
-                                                        fontWeight: FontWeight.bold,
-                                                        color: isBill ? Colors.redAccent : Colors.green,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Text(
-                                                    'Ref: ${tx['ref']}',
-                                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppColors.textPrimary),
-                                                  ),
-                                                ],
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                tx['details'],
-                                                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                                              ),
-                                              const SizedBox(height: 2),
-                                              Text(
-                                                formattedDate,
-                                                style: const TextStyle(fontSize: 10, color: AppColors.textMuted),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        Text(
-                                          '${isBill ? "+" : "-"} ₹${(tx['amount'] as double).toStringAsFixed(2)}',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 14,
-                                            color: isBill ? Colors.redAccent : Colors.green,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                if (latestCust.pendingBalance > 0) ...[
-                  SizedBox(
-                    width: 200,
-                    child: TextField(
-                      controller: amountController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(
-                        hintText: 'Amount (₹) to collect',
-                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      ),
-                    ),
-                  ),
-                  ElevatedButton(
-                    onPressed: () {
-                      final amount = double.tryParse(amountController.text) ?? 0.0;
-                      if (amount > 0 && amount <= latestCust.pendingBalance) {
-                        provider.collectCustomerPayment(latestCust.id!, amount);
-                        amountController.clear();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Collected ₹$amount from ${latestCust.name}!')),
-                        );
-                        setDialogState(() {});
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Please enter a valid outstanding amount')),
-                        );
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                    child: const Text('Collect'),
-                  ),
-                ],
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Close'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final provider = Provider.of<DashboardProvider>(context);
-
-    final filteredCustomers = provider.customers.where((cust) {
-      final q = _searchQuery.toLowerCase().trim();
-      return q.isEmpty ||
-          cust.name.toLowerCase().contains(q) ||
-          cust.phone.contains(q);
-    }).toList();
-
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Khata Ledgers (Customers)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                  const SizedBox(height: 2),
-                  Text('Total Clients: ${provider.customers.length} | Outstanding: ₹${provider.totalOutstandingBalance.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                ],
-              ),
-              Row(
-                children: [
-                  SizedBox(
-                    width: 320,
-                    child: TextField(
-                      controller: _searchController,
-                      onChanged: (val) => setState(() => _searchQuery = val),
-                      decoration: InputDecoration(
-                        hintText: 'Search customer by Name or Phone...',
-                        prefixIcon: const Icon(Icons.search, size: 20, color: AppColors.primary),
-                        suffixIcon: _searchQuery.isNotEmpty
-                            ? IconButton(
-                                icon: const Icon(Icons.clear, size: 18),
-                                onPressed: () {
-                                  _searchController.clear();
-                                  setState(() => _searchQuery = '');
-                                },
-                              )
-                            : null,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  ElevatedButton.icon(
-                    onPressed: () => _showAddCustomerDialog(context, provider),
-                    icon: const Icon(Icons.person_add),
-                    label: const Text('Add Customer'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          Expanded(
-            child: CustomCard(
-              padding: EdgeInsets.zero,
-              child: filteredCustomers.isEmpty
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(32.0),
-                        child: Text(
-                          provider.customers.isEmpty ? 'No customers registered.' : 'No customer found matching "$_searchQuery"',
-                          style: const TextStyle(color: AppColors.textMuted),
-                        ),
-                      ),
-                    )
-                  : SingleChildScrollView(
-                      child: DataTable(
-                        columns: const [
-                          DataColumn(label: Text('Customer Name', style: TextStyle(fontWeight: FontWeight.bold))),
-                          DataColumn(label: Text('Phone Number', style: TextStyle(fontWeight: FontWeight.bold))),
-                          DataColumn(label: Text('Pending Balance', style: TextStyle(fontWeight: FontWeight.bold))),
-                          DataColumn(label: Text('Actions', style: TextStyle(fontWeight: FontWeight.bold))),
-                        ],
-                        rows: filteredCustomers.map((cust) {
-                          return DataRow(
-                            cells: [
-                              DataCell(Text(cust.name, style: const TextStyle(fontWeight: FontWeight.w600))),
-                              DataCell(Text(cust.phone)),
-                              DataCell(Text(
-                                '₹${cust.pendingBalance.toStringAsFixed(2)}',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: cust.pendingBalance > 0 ? AppColors.warning : AppColors.success,
-                                ),
-                              )),
-                              DataCell(
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(Icons.history, color: AppColors.primaryLight, size: 18),
-                                      tooltip: 'View Ledger History',
-                                      onPressed: () => _showCustomerLedgerDialog(context, cust, provider),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.delete_outline, color: AppColors.error, size: 18),
-                                      tooltip: 'Delete Customer Profile',
-                                      onPressed: () {
-                                        showDialog(
-                                          context: context,
-                                          builder: (ctx) => AlertDialog(
-                                            title: const Text('Delete Customer Profile?'),
-                                            content: Text('Are you sure you want to remove ${cust.name} from Khata Ledgers?'),
-                                            actions: [
-                                              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                                              ElevatedButton(
-                                                style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
-                                                onPressed: () {
-                                                  if (cust.id != null) {
-                                                    provider.deleteCustomer(cust.id!);
-                                                  }
-                                                  Navigator.pop(ctx);
-                                                  ScaffoldMessenger.of(context).showSnackBar(
-                                                    SnackBar(content: Text('Customer ${cust.name} removed.')),
-                                                  );
-                                                },
-                                                child: const Text('Remove'),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                    const SizedBox(width: 8),
-                                    cust.pendingBalance > 0
-                                        ? TextButton(
-                                            onPressed: () {
-                                              provider.collectCustomerPayment(cust.id!, cust.pendingBalance);
-                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                SnackBar(content: Text('Cleared balance for ${cust.name}!')),
-                                              );
-                                            },
-                                            child: const Text('Clear Balance'),
-                                          )
-                                        : const Icon(Icons.check_circle, color: AppColors.success, size: 18),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          );
-                        }).toList(),
-                      ),
-                    ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
+// Unused legacy screens removed.
 // ================= 2. MEDICINE MASTER SCREEN (SQLite Browser) =================
 class MedicineMasterScreen extends StatefulWidget {
   const MedicineMasterScreen({super.key});
@@ -688,29 +174,950 @@ class ExpiryManagementScreen extends StatelessWidget {
   }
 }
 
-// ================= 4. PURCHASE ORDERS SCREEN =================
-class PurchaseScreen extends StatelessWidget {
+// ================= 4. PURCHASE ORDERS & INWARD LEDGER SCREEN =================
+class PurchaseScreen extends StatefulWidget {
   const PurchaseScreen({super.key});
 
   @override
+  State<PurchaseScreen> createState() => _PurchaseScreenState();
+}
+
+class _PurchaseScreenState extends State<PurchaseScreen> {
+  String _searchQuery = '';
+
+  // Local list of purchase bills recorded
+  final List<Map<String, dynamic>> _purchaseBills = [];
+
+  void _showNewPurchaseBillDialog(BuildContext context, DashboardProvider provider) {
+    String selectedSupplierName = provider.suppliers.isNotEmpty ? provider.suppliers.first.name : '';
+    String supplierPhone = provider.suppliers.isNotEmpty ? provider.suppliers.first.contact : '';
+    final billNoController = TextEditingController(text: 'PUR-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}');
+    final billDateController = TextEditingController(text: DateFormat('yyyy-MM-dd').format(DateTime.now()));
+    final paidAmountController = TextEditingController(text: '0.0');
+    final receiptNoController = TextEditingController(text: 'RCP-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}');
+    String paymentMode = 'Cash';
+    bool generateReceipt = true;
+
+    // Item input controllers
+    final itemController = TextEditingController();
+    final batchController = TextEditingController();
+    final expiryController = TextEditingController();
+    final qtyController = TextEditingController(text: '1');
+    final purchasePriceController = TextEditingController();
+    final mrpController = TextEditingController();
+    final salePriceController = TextEditingController();
+
+    List<Map<String, dynamic>> billItems = [];
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            double totalInvoiceAmount = billItems.fold(0.0, (sum, item) => sum + (item['qty'] * item['purchasePrice']));
+
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Row(
+                children: const [
+                  Icon(Icons.add_shopping_cart, color: AppColors.primary, size: 24),
+                  SizedBox(width: 10),
+                  Text('Record Wholesaler Purchase Invoice', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+                ],
+              ),
+              content: SizedBox(
+                width: 880,
+                height: 630,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Supplier & Bill Meta Details
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.05),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.15)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('DISTRIBUTOR & INVOICE DETAILS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primary, letterSpacing: 0.5)),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  flex: 2,
+                                  child: provider.suppliers.isNotEmpty
+                                      ? DropdownButtonFormField<String>(
+                                          isExpanded: true,
+                                          initialValue: selectedSupplierName.isNotEmpty ? selectedSupplierName : provider.suppliers.first.name,
+                                          decoration: InputDecoration(
+                                            labelText: 'Select Wholesaler / Supplier',
+                                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                          items: provider.suppliers.map((sup) {
+                                            return DropdownMenuItem(
+                                              value: sup.name,
+                                              child: Text('${sup.name} (${sup.contact})', overflow: TextOverflow.ellipsis),
+                                            );
+                                          }).toList(),
+                                          onChanged: (val) {
+                                            if (val != null) {
+                                              setDialogState(() {
+                                                selectedSupplierName = val;
+                                                final matchedSup = provider.suppliers.firstWhere((s) => s.name == val);
+                                                supplierPhone = matchedSup.contact;
+                                              });
+                                            }
+                                          },
+                                        )
+                                      : TextField(
+                                          onChanged: (val) => selectedSupplierName = val,
+                                          decoration: InputDecoration(
+                                            labelText: 'Distributor Name',
+                                            hintText: 'e.g. Mankind Pharma Agency',
+                                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                          ),
+                                        ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: TextField(
+                                    controller: billNoController,
+                                    decoration: InputDecoration(
+                                      labelText: 'Bill / Invoice No.',
+                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: TextField(
+                                    controller: billDateController,
+                                    decoration: InputDecoration(
+                                      labelText: 'Invoice Date',
+                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Add Item Form
+                      const Text('ADD INCOMING MEDICINE BATCHES', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textSecondary, letterSpacing: 0.5)),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: Autocomplete<MedicineMasterModel>(
+                              optionsBuilder: (TextEditingValue textEditingValue) async {
+                                final query = textEditingValue.text.trim();
+                                if (query.isEmpty) {
+                                  return const Iterable<MedicineMasterModel>.empty();
+                                }
+
+                                // 1. Search SQLite Database (Master Medicine Catalogue)
+                                final dbResults = await SqliteService.instance.searchMedicines(query);
+
+                                // 2. Search In-Memory Inventory
+                                final invMatches = provider.inventory
+                                    .where((i) => i.medicineName.toLowerCase().contains(query.toLowerCase()))
+                                    .map((i) => MedicineMasterModel(
+                                          id: i.id != null ? int.tryParse(i.id!) ?? 0 : 0,
+                                          medicineName: i.medicineName,
+                                          mrp: i.mrp,
+                                          composition: i.supplierName,
+                                        ));
+
+                                // Combine & Deduplicate
+                                final Map<String, MedicineMasterModel> combined = {};
+                                for (var item in dbResults) {
+                                  combined[item.medicineName.toLowerCase()] = item;
+                                }
+                                for (var item in invMatches) {
+                                  if (!combined.containsKey(item.medicineName.toLowerCase())) {
+                                    combined[item.medicineName.toLowerCase()] = item;
+                                  }
+                                }
+
+                                return combined.values.take(15);
+                              },
+                              displayStringForOption: (MedicineMasterModel option) => option.medicineName,
+                              onSelected: (MedicineMasterModel selection) {
+                                setDialogState(() {
+                                  itemController.text = selection.medicineName;
+                                  if (selection.mrp > 0) {
+                                    mrpController.text = selection.mrp.toStringAsFixed(2);
+                                    salePriceController.text = (selection.mrp * 0.9).toStringAsFixed(2);
+                                    purchasePriceController.text = (selection.mrp * 0.75).toStringAsFixed(2);
+                                  }
+                                });
+                              },
+                              fieldViewBuilder: (context, textEditingController, focusNode, onFieldSubmitted) {
+                                if (textEditingController.text != itemController.text && itemController.text.isNotEmpty && textEditingController.text.isEmpty) {
+                                  textEditingController.text = itemController.text;
+                                }
+                                textEditingController.addListener(() {
+                                  if (itemController.text != textEditingController.text) {
+                                    itemController.text = textEditingController.text;
+                                  }
+                                });
+
+                                return TextField(
+                                  controller: textEditingController,
+                                  focusNode: focusNode,
+                                  decoration: InputDecoration(
+                                    labelText: 'Medicine / Item Name',
+                                    hintText: 'Type 1 letter for suggestion...',
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                  ),
+                                  onSubmitted: (val) => onFieldSubmitted(),
+                                );
+                              },
+                              optionsViewBuilder: (context, onSelected, options) {
+                                return Align(
+                                  alignment: Alignment.topLeft,
+                                  child: Material(
+                                    elevation: 6.0,
+                                    color: AppColors.surface,
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Container(
+                                      width: 320,
+                                      constraints: const BoxConstraints(maxHeight: 220),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: ListView.separated(
+                                        padding: EdgeInsets.zero,
+                                        shrinkWrap: true,
+                                        itemCount: options.length,
+                                        separatorBuilder: (ctx, idx) => const Divider(height: 1),
+                                        itemBuilder: (context, index) {
+                                          final MedicineMasterModel option = options.elementAt(index);
+                                          return ListTile(
+                                            dense: true,
+                                            title: Text(option.medicineName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary)),
+                                            subtitle: option.mrp > 0
+                                                ? Text('MRP: ₹${option.mrp.toStringAsFixed(2)} ${option.composition != null && option.composition!.isNotEmpty ? "| ${option.composition}" : ""}', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary))
+                                                : null,
+                                            onTap: () => onSelected(option),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            flex: 2,
+                            child: TextField(
+                              controller: batchController,
+                              decoration: InputDecoration(
+                                labelText: 'Batch No.',
+                                hintText: 'BT-102',
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            flex: 2,
+                            child: TextField(
+                              controller: expiryController,
+                              decoration: InputDecoration(
+                                labelText: 'Expiry (YYYY-MM)',
+                                hintText: '2027-12',
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: qtyController,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                labelText: 'Qty',
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: TextField(
+                              controller: purchasePriceController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'Cost Price (₹)',
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: TextField(
+                              controller: mrpController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'MRP (₹)',
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: TextField(
+                              controller: salePriceController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'Sale Rate (₹)',
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                            onPressed: () {
+                              final name = itemController.text.trim();
+                              final batch = batchController.text.trim();
+                              final exp = expiryController.text.trim();
+                              final q = int.tryParse(qtyController.text.trim()) ?? 0;
+                              final cost = double.tryParse(purchasePriceController.text.trim()) ?? 0.0;
+                              final mrpVal = double.tryParse(mrpController.text.trim()) ?? 0.0;
+                              final saleVal = double.tryParse(salePriceController.text.trim()) ?? 0.0;
+
+                              if (name.isEmpty || batch.isEmpty || q <= 0 || cost <= 0) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    backgroundColor: AppColors.error,
+                                    content: Text('Please enter valid item name, batch number, quantity and cost price.'),
+                                  ),
+                                );
+                                return;
+                              }
+
+                              setDialogState(() {
+                                billItems.add({
+                                  'medicineName': name,
+                                  'batchNumber': batch,
+                                  'expiryDate': exp.isNotEmpty ? exp : '2027-12',
+                                  'qty': q,
+                                  'purchasePrice': cost,
+                                  'mrp': mrpVal > 0 ? mrpVal : cost * 1.2,
+                                  'salePrice': saleVal > 0 ? saleVal : (mrpVal > 0 ? mrpVal : cost * 1.15),
+                                });
+                                itemController.clear();
+                                batchController.clear();
+                                expiryController.clear();
+                                qtyController.text = '1';
+                                purchasePriceController.clear();
+                                mrpController.clear();
+                                salePriceController.clear();
+                              });
+                            },
+                            icon: const Icon(Icons.add, size: 16),
+                            label: const Text('Add Item'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Items Table
+                      const Text('PURCHASE BILL ITEMS LIST', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textSecondary, letterSpacing: 0.5)),
+                      const SizedBox(height: 6),
+                      Container(
+                        height: 135,
+                        decoration: BoxDecoration(
+                          border: Border.all(color: AppColors.border),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: billItems.isEmpty
+                            ? const Center(child: Text('No items added to invoice yet.', style: TextStyle(color: AppColors.textMuted)))
+                            : ListView.separated(
+                                itemCount: billItems.length,
+                                separatorBuilder: (ctx, idx) => const Divider(height: 1),
+                                itemBuilder: (context, idx) {
+                                  final itm = billItems[idx];
+                                  final lineTotal = itm['qty'] * itm['purchasePrice'];
+                                  return ListTile(
+                                    dense: true,
+                                    title: Text('${itm['medicineName']} (Batch: ${itm['batchNumber']})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                    subtitle: Text('Qty: ${itm['qty']} | Cost: ₹${itm['purchasePrice']} | Sale: ₹${itm['salePrice']} | Exp: ${itm['expiryDate']}'),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text('₹${lineTotal.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primary)),
+                                        const SizedBox(width: 8),
+                                        IconButton(
+                                          icon: const Icon(Icons.delete_outline, size: 16, color: AppColors.error),
+                                          onPressed: () {
+                                            setDialogState(() {
+                                              billItems.removeAt(idx);
+                                            });
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Settlement & Payment Receipt Summary
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.border),
+                        ),
+                        child: Column(
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                // Gross Amount
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text('Total Bill Amount', style: TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
+                                    const SizedBox(height: 2),
+                                    Text('₹${totalInvoiceAmount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.primary)),
+                                  ],
+                                ),
+                                // Amount Paid Now
+                                SizedBox(
+                                  width: 165,
+                                  child: TextField(
+                                    controller: paidAmountController,
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    decoration: InputDecoration(
+                                      labelText: 'Amount Paid Now (₹)',
+                                      prefixText: '₹ ',
+                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    ),
+                                    onChanged: (val) => setDialogState(() {}),
+                                  ),
+                                ),
+                                // Calculated Pending Due
+                                Builder(
+                                  builder: (context) {
+                                    final paidVal = double.tryParse(paidAmountController.text.trim()) ?? 0.0;
+                                    final pendingVal = (totalInvoiceAmount - paidVal).clamp(0.0, 9999999.0);
+                                    return Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const Text('Pending Due (बकाया)', style: TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w500)),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          '₹${pendingVal.toStringAsFixed(2)}',
+                                          style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                            color: pendingVal > 0 ? AppColors.error : AppColors.success,
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                                // Payment Mode Dropdown
+                                SizedBox(
+                                  width: 140,
+                                  child: DropdownButtonFormField<String>(
+                                    isExpanded: true,
+                                    initialValue: paymentMode,
+                                    items: const [
+                                      DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                                      DropdownMenuItem(value: 'UPI / Online', child: Text('UPI / Online')),
+                                      DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
+                                      DropdownMenuItem(value: 'Credit', child: Text('Credit (Udhar)')),
+                                    ],
+                                    onChanged: (val) {
+                                      if (val != null) setDialogState(() => paymentMode = val);
+                                    },
+                                    decoration: InputDecoration(
+                                      labelText: 'Payment Mode',
+                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            const Divider(height: 1),
+                            const SizedBox(height: 6),
+                            // Payment Receipt Options
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Row(
+                                  children: [
+                                    Checkbox(
+                                      value: generateReceipt,
+                                      activeColor: AppColors.primary,
+                                      onChanged: (val) => setDialogState(() => generateReceipt = val ?? true),
+                                    ),
+                                    const Text('Generate & Print Payment Receipt Slip for Supplier', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                                  ],
+                                ),
+                                if (generateReceipt)
+                                  SizedBox(
+                                    width: 190,
+                                    child: TextField(
+                                      controller: receiptNoController,
+                                      decoration: InputDecoration(
+                                        labelText: 'Receipt / Voucher No.',
+                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () async {
+                    final supName = selectedSupplierName.trim();
+                    final billNo = billNoController.text.trim();
+                    final paidNow = double.tryParse(paidAmountController.text.trim()) ?? 0.0;
+                    final receiptNo = receiptNoController.text.trim();
+
+                    if (supName.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(backgroundColor: AppColors.error, content: Text('Please select or enter Wholesaler Distributor Name.')),
+                      );
+                      return;
+                    }
+                    if (billItems.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(backgroundColor: AppColors.error, content: Text('Please add at least one medicine batch item to the invoice.')),
+                      );
+                      return;
+                    }
+
+                    // 1. Seed Inventory Items & Auto-Save New Medicine Names to Master Database
+                    for (var itm in billItems) {
+                      final medName = itm['medicineName'].toString().trim();
+                      final mrpVal = (itm['mrp'] as num).toDouble();
+
+                      await provider.addInventory(InventoryModel(
+                        medicineName: medName,
+                        batchNumber: itm['batchNumber'],
+                        expiryDate: itm['expiryDate'],
+                        quantity: itm['qty'],
+                        purchasePrice: itm['purchasePrice'],
+                        mrp: mrpVal,
+                        salePrice: itm['salePrice'],
+                        supplierName: supName,
+                      ));
+
+                      // Auto-save new medicine name to Master DB for future suggestions
+                      try {
+                        final existing = await SqliteService.instance.searchMedicines(medName);
+                        final bool exactFound = existing.any((m) => m.medicineName.trim().toLowerCase() == medName.toLowerCase());
+                        if (!exactFound) {
+                          await SqliteService.instance.insertMedicine(MedicineMasterModel(
+                            id: DateTime.now().millisecondsSinceEpoch % 10000000,
+                            medicineName: medName,
+                            mrp: mrpVal,
+                            manufacturer: supName,
+                          ));
+                        }
+                      } catch (e) {
+                        debugPrint('Error inserting new medicine master: $e');
+                      }
+                    }
+
+                    // 2. Record Supplier Purchase & Update Due
+                    final pendingDue = (totalInvoiceAmount - paidNow).clamp(0.0, 9999999.0);
+                    SupplierModel? matchedSup;
+                    final existingIndex = provider.suppliers.indexWhere(
+                      (s) => s.name.trim().toLowerCase() == supName.toLowerCase(),
+                    );
+                    if (existingIndex != -1) {
+                      matchedSup = provider.suppliers[existingIndex];
+                    }
+
+                    String supplierId = matchedSup?.id ?? '';
+                    if (supplierId.isEmpty) {
+                      await provider.addSupplier(SupplierModel(name: supName, contact: supplierPhone, due: 0.0));
+                      final createdSup = provider.suppliers.firstWhere(
+                        (s) => s.name.trim().toLowerCase() == supName.toLowerCase(),
+                        orElse: () => SupplierModel(name: supName, contact: supplierPhone),
+                      );
+                      supplierId = createdSup.id ?? supName;
+                    }
+
+                    // Log purchase bill in supplier ledger if pending due > 0
+                    if (pendingDue > 0) {
+                      await provider.addSupplierPurchase(
+                        supplierId,
+                        pendingDue,
+                        billNumber: billNo,
+                        remarks: 'Bill $billNo total ₹$totalInvoiceAmount (Paid ₹$paidNow)',
+                        paymentMode: paymentMode,
+                      );
+                    }
+
+                    // Record payment voucher if paidNow > 0
+                    if (paidNow > 0) {
+                      await provider.paySupplier(
+                        supplierId,
+                        paidNow,
+                        paymentMode: paymentMode,
+                        referenceNumber: receiptNo,
+                        remarks: 'Payment against Purchase Bill #$billNo',
+                      );
+                    }
+
+                    // 3. Save local purchase bill log
+                    setState(() {
+                      _purchaseBills.insert(0, {
+                        'billNumber': billNo,
+                        'supplierName': supName,
+                        'date': billDateController.text,
+                        'itemsCount': billItems.length,
+                        'totalAmount': totalInvoiceAmount,
+                        'paidAmount': paidNow,
+                        'dueAmount': pendingDue,
+                        'paymentMode': paymentMode,
+                        'receiptNo': receiptNo,
+                        'items': billItems,
+                      });
+                    });
+
+                    // 4. Optionally Print Supplier Payment Receipt Slip
+                    if (generateReceipt && paidNow > 0) {
+                      try {
+                        final pdfBytes = await PdfService.generatePaymentReceiptPdf(
+                          voucherNumber: receiptNo,
+                          partyName: supName,
+                          partyPhone: supplierPhone,
+                          amountPaid: paidNow,
+                          paymentMode: paymentMode,
+                          referenceNumber: billNo,
+                          remarks: 'Wholesale Stock Purchase Payment Slip',
+                          createdAt: DateTime.now(),
+                          remainingBalance: pendingDue,
+                        );
+                        await Printing.layoutPdf(onLayout: (_) async => pdfBytes);
+                      } catch (e) {
+                        debugPrint('Error printing payment receipt PDF: $e');
+                      }
+                    }
+
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    if (!context.mounted) return;
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        backgroundColor: AppColors.success,
+                        content: Text('✅ Purchase Invoice "$billNo" recorded & payment receipt generated!'),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.check_circle),
+                  label: const Text('Save & Seed Stock Inventory'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final provider = Provider.of<DashboardProvider>(context);
+    final suppliers = provider.suppliers;
+
+    final filteredBills = _purchaseBills.where((b) {
+      final q = _searchQuery.toLowerCase().trim();
+      return q.isEmpty ||
+          b['billNumber'].toString().toLowerCase().contains(q) ||
+          b['supplierName'].toString().toLowerCase().contains(q);
+    }).toList();
+
+    final totalPurchaseSum = _purchaseBills.fold(0.0, (sum, b) => sum + (b['totalAmount'] as double));
+    final totalDueSum = suppliers.fold(0.0, (sum, s) => sum + s.due);
+
     return Padding(
       padding: const EdgeInsets.all(24.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Purchase Entry Ledger', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+          // Header Bar
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: const [
+                  Text('Purchase Bills & Inward Stock Ledger', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                  SizedBox(height: 2),
+                  Text('Record supplier invoices, seed incoming medicine batches, and track wholesaler dues', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                ],
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: () => _showNewPurchaseBillDialog(context, provider),
+                icon: const Icon(Icons.add_shopping_cart, size: 18),
+                label: const Text('Record New Purchase Bill', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
           const SizedBox(height: 20),
+
+          // Top Metric Cards
+          Row(
+            children: [
+              Expanded(
+                child: CustomCard(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
+                        child: const Icon(Icons.receipt_long, color: AppColors.primary, size: 24),
+                      ),
+                      const SizedBox(width: 14),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Total Invoices Logged', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                          const SizedBox(height: 4),
+                          Text('${_purchaseBills.length} Bills (₹${totalPurchaseSum.toStringAsFixed(0)})', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: CustomCard(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: AppColors.accent.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
+                        child: const Icon(Icons.local_shipping, color: AppColors.accent, size: 24),
+                      ),
+                      const SizedBox(width: 14),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Active Wholesalers', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                          const SizedBox(height: 4),
+                          Text('${suppliers.length} Distributors', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: CustomCard(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: AppColors.error.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
+                        child: const Icon(Icons.account_balance_wallet, color: AppColors.error, size: 24),
+                      ),
+                      const SizedBox(width: 14),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Total Supplier Dues', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                          const SizedBox(height: 4),
+                          Text('₹${totalDueSum.toStringAsFixed(2)}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.error)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          // Search Bar & Table Container
           Expanded(
             child: CustomCard(
+              padding: const EdgeInsets.all(16),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  Icon(Icons.add_shopping_cart, size: 48, color: AppColors.primary),
-                  SizedBox(height: 16),
-                  Text('Purchase module is seeding stock logs.', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                  SizedBox(height: 8),
-                  Text('Go to Stock Management to directly add new batches, or use purchase ledger sync.', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          onChanged: (val) => setState(() => _searchQuery = val),
+                          decoration: InputDecoration(
+                            hintText: 'Search purchase bills by bill number or distributor name...',
+                            prefixIcon: const Icon(Icons.search, size: 18),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: filteredBills.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.shopping_bag_outlined, size: 48, color: AppColors.textMuted),
+                                const SizedBox(height: 12),
+                                const Text('No Purchase Bills Recorded Yet', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                                const SizedBox(height: 6),
+                                const Text('Click "Record New Purchase Bill" above to add distributor bills and seed stock inventory.', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                                const SizedBox(height: 16),
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+                                  onPressed: () => _showNewPurchaseBillDialog(context, provider),
+                                  icon: const Icon(Icons.add_shopping_cart, size: 16),
+                                  label: const Text('Record First Purchase Bill'),
+                                ),
+                              ],
+                            ),
+                          )
+                        : SingleChildScrollView(
+                            scrollDirection: Axis.vertical,
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: DataTable(
+                                columnSpacing: 24,
+                                columns: const [
+                                  DataColumn(label: Text('Bill No & Date', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('Distributor / Wholesaler', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('Items Count', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('Total Amount', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('Amount Paid', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('Due / Credit', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('Mode', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('Receipt / Action', style: TextStyle(fontWeight: FontWeight.bold))),
+                                ],
+                                rows: filteredBills.map((bill) {
+                                  final due = bill['dueAmount'] as double;
+                                  final paid = bill['paidAmount'] as double;
+                                  return DataRow(
+                                    cells: [
+                                      DataCell(Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Text(bill['billNumber'], style: const TextStyle(fontWeight: FontWeight.bold)),
+                                          Text(bill['date'], style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                                        ],
+                                      )),
+                                      DataCell(Text(bill['supplierName'], style: const TextStyle(fontWeight: FontWeight.w600))),
+                                      DataCell(Text('${bill['itemsCount']} Batches')),
+                                      DataCell(Text('₹${(bill['totalAmount'] as double).toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold))),
+                                      DataCell(Text('₹${paid.toStringAsFixed(2)}', style: TextStyle(color: paid > 0 ? AppColors.success : AppColors.textMuted, fontWeight: FontWeight.bold))),
+                                      DataCell(Text('₹${due.toStringAsFixed(2)}', style: TextStyle(color: due > 0 ? AppColors.error : AppColors.textMuted, fontWeight: FontWeight.bold))),
+                                      DataCell(Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6)),
+                                        child: Text(bill['paymentMode'], style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primary)),
+                                      )),
+                                      DataCell(
+                                        ElevatedButton.icon(
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: AppColors.primary,
+                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                          ),
+                                          icon: const Icon(Icons.print_outlined, size: 14),
+                                          label: const Text('Print Receipt Slip', style: TextStyle(fontSize: 11)),
+                                          onPressed: () async {
+                                            try {
+                                              final pdfBytes = await PdfService.generatePaymentReceiptPdf(
+                                                voucherNumber: bill['receiptNo'] ?? 'RCP-${bill['billNumber']}',
+                                                partyName: bill['supplierName'],
+                                                partyPhone: '',
+                                                amountPaid: paid,
+                                                paymentMode: bill['paymentMode'],
+                                                referenceNumber: bill['billNumber'],
+                                                remarks: paid > 0 ? 'Wholesale Stock Purchase Payment Slip' : 'Wholesale Purchase Credit Invoice Voucher',
+                                                createdAt: DateTime.now(),
+                                                remainingBalance: due,
+                                              );
+                                              await Printing.layoutPdf(onLayout: (_) async => pdfBytes);
+                                            } catch (e) {
+                                              debugPrint('Error printing receipt: $e');
+                                            }
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                          ),
+                  ),
                 ],
               ),
             ),
@@ -990,7 +1397,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                               const Text('Payment Mode', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                               const SizedBox(height: 6),
                               DropdownButtonFormField<String>(
-                                value: selectedMode,
+                                initialValue: selectedMode,
                                 items: const [
                                   DropdownMenuItem(value: 'Cash', child: Text('Cash')),
                                   DropdownMenuItem(value: 'UPI / Online', child: Text('UPI / Online')),
@@ -1077,7 +1484,9 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                       remarks: remarks,
                     );
 
-                    Navigator.pop(ctx);
+                    if (ctx.mounted) {
+                      Navigator.pop(ctx);
+                    }
                     if (!context.mounted) return;
 
                     ScaffoldMessenger.of(context).showSnackBar(

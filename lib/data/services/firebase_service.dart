@@ -262,12 +262,15 @@ class FirebaseService {
   Future<String> createCustomer(CustomerModel customer) async {
     final docRef = _customersRef.doc();
     final newCustomer = customer.copyWith(id: docRef.id);
-    await docRef.set(newCustomer.toMap());
+    final mapData = newCustomer.toMap();
+    mapData['searchName'] = customer.name.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+    await docRef.set(mapData);
     return docRef.id;
   }
 
   // Batch insert multiple customers to Firestore safely
   Future<void> batchCreateCustomers(List<CustomerModel> customers) async {
+    if (customers.isEmpty) return;
     final chunks = <List<CustomerModel>>[];
     for (var i = 0; i < customers.length; i += 400) {
       chunks.add(customers.sublist(i, i + 400 > customers.length ? customers.length : i + 400));
@@ -276,8 +279,12 @@ class FirebaseService {
     for (var chunk in chunks) {
       final batch = _firestore.batch();
       for (var c in chunk) {
-        final docRef = _customersRef.doc();
-        batch.set(docRef, c.copyWith(id: docRef.id).toMap());
+        final docRef = c.id != null && c.id!.isNotEmpty && !c.id!.startsWith('mock_')
+            ? _customersRef.doc(c.id)
+            : _customersRef.doc();
+        final mapData = c.copyWith(id: docRef.id).toMap();
+        mapData['searchName'] = c.name.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+        batch.set(docRef, mapData, SetOptions(merge: true));
       }
       await batch.commit();
     }
@@ -286,6 +293,17 @@ class FirebaseService {
   // Delete a customer profile
   Future<void> deleteCustomer(String customerId) async {
     await _customersRef.doc(customerId).delete();
+  }
+
+  // Update customer pending balance
+  Future<void> updateCustomerPendingBalance(String customerId, double newBalance) async {
+    try {
+      await _customersRef.doc(customerId).update({
+        'pendingBalance': newBalance,
+      });
+    } catch (e) {
+      debugPrint('Error updating customer pending balance in Firebase: $e');
+    }
   }
 
   // ================= SUPPLIERS API =================
@@ -327,10 +345,72 @@ class FirebaseService {
 
   CollectionReference get _paymentsRef => _storeRef.doc(storeId).collection('customer_payments');
 
-  // Clear customer balance (payment received) using atomic transaction
-  Future<bool> clearCustomerBalance(String customerId, double paymentAmount) async {
+  Future<DocumentReference?> _findCustomerDocRef(String identifier) async {
+    final clean = identifier.trim();
+    if (clean.isEmpty) return null;
+
     try {
-      final docRef = _customersRef.doc(customerId);
+      final directRef = _customersRef.doc(clean);
+      final directSnap = await directRef.get();
+      if (directSnap.exists) return directRef;
+    } catch (_) {}
+
+    try {
+      final normalized = clean.replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+      final q1 = await _customersRef.where('searchName', isEqualTo: normalized).limit(1).get();
+      if (q1.docs.isNotEmpty) return q1.docs.first.reference;
+
+      final q2 = await _customersRef.where('name', isEqualTo: clean).limit(1).get();
+      if (q2.docs.isNotEmpty) return q2.docs.first.reference;
+
+      final q3 = await _customersRef.where('phone', isEqualTo: clean).limit(1).get();
+      if (q3.docs.isNotEmpty) return q3.docs.first.reference;
+    } catch (e) {
+      debugPrint('Error finding customer doc ref for $identifier: $e');
+    }
+
+    return null;
+  }
+
+  Future<DocumentReference?> _findSupplierDocRef(String identifier) async {
+    final clean = identifier.trim();
+    if (clean.isEmpty) return null;
+
+    try {
+      final directRef = _suppliersRef.doc(clean);
+      final directSnap = await directRef.get();
+      if (directSnap.exists) return directRef;
+    } catch (_) {}
+
+    try {
+      final q1 = await _suppliersRef.where('name', isEqualTo: clean).limit(1).get();
+      if (q1.docs.isNotEmpty) return q1.docs.first.reference;
+
+      final querySnap = await _suppliersRef.get();
+      for (var doc in querySnap.docs) {
+        final name = (doc.data() as Map<String, dynamic>)['name']?.toString() ?? '';
+        if (name.trim().toLowerCase() == clean.toLowerCase()) {
+          return doc.reference;
+        }
+      }
+    } catch (e) {
+      debugPrint('Error finding supplier doc ref for $identifier: $e');
+    }
+
+    return null;
+  }
+
+  // Clear customer balance (payment received) using atomic transaction
+  Future<bool> clearCustomerBalance(
+    String customerId,
+    double paymentAmount, {
+    String paymentMode = 'Cash',
+    String referenceNumber = '',
+    String remarks = '',
+  }) async {
+    try {
+      final docRef = await _findCustomerDocRef(customerId);
+      if (docRef == null) throw Exception('Customer doc not found for: $customerId');
       String custName = '';
       String custPhone = '';
 
@@ -345,14 +425,34 @@ class FirebaseService {
         transaction.update(docRef, {'pendingBalance': newBalance});
       });
 
-      // Record this payment in the history!
+      final now = DateTime.now();
+
+      // Record this payment in history!
       await recordCustomerPayment(CustomerPaymentModel(
-        customerId: customerId,
+        customerId: docRef.id,
         customerName: custName,
         customerPhone: custPhone,
         amountPaid: paymentAmount,
-        createdAt: DateTime.now(),
+        createdAt: now,
       ));
+
+      // Record RECEIPT voucher
+      final vNum = 'RCP-${now.millisecondsSinceEpoch.toString().substring(7)}';
+      final voucherDocRef = _vouchersRef.doc();
+      await voucherDocRef.set(VoucherModel(
+        id: voucherDocRef.id,
+        voucherNumber: vNum,
+        type: 'RECEIPT',
+        partyName: custName,
+        partyPhone: custPhone,
+        amount: paymentAmount,
+        paymentMode: paymentMode,
+        category: 'Customer Khata',
+        referenceNumber: referenceNumber,
+        remarks: remarks.isNotEmpty ? remarks : 'Received from $custName',
+        createdAt: now,
+      ).toMap());
+
       return true;
     } catch (e) {
       debugPrint('Error clearing customer balance transaction: $e');
@@ -363,7 +463,8 @@ class FirebaseService {
   // Add customer credit (manual Udhar added) using atomic transaction
   Future<bool> addCustomerCredit(String customerId, double creditAmount) async {
     try {
-      final docRef = _customersRef.doc(customerId);
+      final docRef = await _findCustomerDocRef(customerId);
+      if (docRef == null) throw Exception('Customer doc not found for: $customerId');
       await _firestore.runTransaction((transaction) async {
         final snapshot = await transaction.get(docRef);
         if (!snapshot.exists) throw Exception('Customer not found');
@@ -421,12 +522,8 @@ class FirebaseService {
     // If it's a RECEIPT voucher for a customer, update customer balance with transaction
     if (voucher.type == 'RECEIPT' && voucher.partyName.isNotEmpty) {
       try {
-        final normalized = voucher.partyName.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
-        final query = await _customersRef.where('searchName', isEqualTo: normalized).limit(1).get();
-        final docs = query.docs.isNotEmpty ? query.docs : (await _customersRef.where('name', isEqualTo: voucher.partyName.trim()).limit(1).get()).docs;
-
-        if (docs.isNotEmpty) {
-          final custDocRef = docs.first.reference;
+        final custDocRef = await _findCustomerDocRef(voucher.partyName);
+        if (custDocRef != null) {
           await _firestore.runTransaction((transaction) async {
             final snap = await transaction.get(custDocRef);
             if (!snap.exists) return;
@@ -446,6 +543,44 @@ class FirebaseService {
         }
       } catch (e) {
         debugPrint('Error auto updating customer balance from voucher: $e');
+      }
+    }
+
+    // If PAYMENT to supplier -> reduce supplier due
+    if (voucher.type == 'PAYMENT' && voucher.partyName.isNotEmpty) {
+      try {
+        final supDocRef = await _findSupplierDocRef(voucher.partyName);
+        if (supDocRef != null) {
+          await _firestore.runTransaction((transaction) async {
+            final sSnap = await transaction.get(supDocRef);
+            if (!sSnap.exists) return;
+            final data = sSnap.data() as Map<String, dynamic>;
+            final currentDue = (data['due'] as num?)?.toDouble() ?? 0.0;
+            final newDue = (currentDue - voucher.amount).clamp(0.0, 9999999.0);
+            transaction.update(supDocRef, {'due': newDue});
+          });
+        }
+      } catch (e) {
+        debugPrint('Error auto updating supplier due for PAYMENT voucher: $e');
+      }
+    }
+
+    // If PURCHASE from supplier -> increase supplier due
+    if (voucher.type == 'PURCHASE' && voucher.partyName.isNotEmpty) {
+      try {
+        final supDocRef = await _findSupplierDocRef(voucher.partyName);
+        if (supDocRef != null) {
+          await _firestore.runTransaction((transaction) async {
+            final sSnap = await transaction.get(supDocRef);
+            if (!sSnap.exists) return;
+            final data = sSnap.data() as Map<String, dynamic>;
+            final currentDue = (data['due'] as num?)?.toDouble() ?? 0.0;
+            final newDue = (currentDue + voucher.amount).toDouble();
+            transaction.update(supDocRef, {'due': newDue});
+          });
+        }
+      } catch (e) {
+        debugPrint('Error auto updating supplier due for PURCHASE voucher: $e');
       }
     }
     return docRef.id;

@@ -55,7 +55,7 @@ class DashboardProvider extends ChangeNotifier {
   }
 
   Future<void> _init() async {
-    _loadOfflineCustomers();
+    await _loadOfflineCustomers();
     initRealtimeSync();
     _loadSettings();
   }
@@ -126,17 +126,9 @@ class DashboardProvider extends ChangeNotifier {
       // 3. Customers Sync
       _customersSubscription = FirebaseService.instance.streamCustomers().listen(
         (data) {
-          if (data.isNotEmpty) {
-            _customers = data;
-            _firebaseActive = true;
-            _saveOfflineCustomers();
-          } else {
-            if (_customers.isNotEmpty) {
-              // Automatically sync local customer database to Firebase
-              FirebaseService.instance.batchCreateCustomers(_customers);
-              _firebaseActive = true;
-            }
-          }
+          _firebaseActive = true;
+          _customers = data;
+          _saveOfflineCustomers();
           notifyListeners();
         },
         onError: (e) {
@@ -148,9 +140,7 @@ class DashboardProvider extends ChangeNotifier {
       // 4. Payments Sync
       _paymentsSubscription = FirebaseService.instance.streamCustomerPayments().listen(
         (data) {
-          if (data.isNotEmpty) {
-            _customerPayments = data;
-          }
+          _customerPayments = data;
           notifyListeners();
         },
         onError: (e) {
@@ -172,11 +162,7 @@ class DashboardProvider extends ChangeNotifier {
       // 6. Suppliers Sync
       _suppliersSubscription = FirebaseService.instance.streamSuppliers().listen(
         (data) {
-          if (data.isNotEmpty) {
-            _suppliers = data;
-          } else if (_suppliers.isNotEmpty) {
-            FirebaseService.instance.batchCreateSuppliers(_suppliers);
-          }
+          _suppliers = data;
           notifyListeners();
         },
         onError: (e) {
@@ -554,12 +540,16 @@ class DashboardProvider extends ChangeNotifier {
       return false; // Customer already registered
     }
 
-    if (_firebaseActive) {
+    try {
       final docId = await FirebaseService.instance.createCustomer(customer);
-      _customers.add(customer.copyWith(id: docId));
-    } else {
+      final newCust = customer.copyWith(id: docId);
+      _customers.add(newCust);
+      _firebaseActive = true;
+    } catch (e) {
+      debugPrint('Firebase createCustomer error: $e');
       _customers.add(customer.copyWith(id: 'mock_cust_${DateTime.now().millisecondsSinceEpoch}'));
     }
+
     await _saveOfflineCustomers();
     notifyListeners();
     return true; // Added successfully
@@ -576,35 +566,167 @@ class DashboardProvider extends ChangeNotifier {
   }
 
   Future<void> deleteCustomer(String customerId) async {
+    _customers.removeWhere((c) => c.id == customerId);
+    await _saveOfflineCustomers();
+    notifyListeners();
+
     if (_firebaseActive) {
-      await FirebaseService.instance.deleteCustomer(customerId);
-    } else {
-      _customers.removeWhere((c) => c.id == customerId);
-      _saveOfflineCustomers();
-      notifyListeners();
+      try {
+        await FirebaseService.instance.deleteCustomer(customerId);
+      } catch (e) {
+        debugPrint('Error deleting customer from Firebase: $e');
+      }
     }
   }
 
-  Future<void> collectCustomerPayment(String customerId, double amount) async {
-    if (_firebaseActive) {
-      await FirebaseService.instance.clearCustomerBalance(customerId, amount);
-    } else {
-      final idx = _customers.indexWhere((cust) => cust.id == customerId);
-      if (idx != -1) {
-        final cust = _customers[idx];
-        final currentBal = cust.pendingBalance;
-        _customers[idx] = cust.copyWith(pendingBalance: (currentBal - amount));
-        
-        // Add offline payment history
-        _customerPayments.insert(0, CustomerPaymentModel(
-          id: 'mock_pay_${DateTime.now().millisecondsSinceEpoch}',
-          customerId: customerId,
+  Future<void> collectCustomerPayment(
+    String customerId,
+    double amount, {
+    String paymentMode = 'Cash',
+    String referenceNumber = '',
+    String remarks = '',
+  }) async {
+    final cleanId = customerId.trim().toLowerCase();
+    final idx = _customers.indexWhere((cust) =>
+        (cust.id != null && cust.id!.toLowerCase() == cleanId) ||
+        cust.name.trim().toLowerCase() == cleanId);
+
+    if (idx != -1) {
+      final cust = _customers[idx];
+      final currentBal = cust.pendingBalance;
+      final newBal = (currentBal - amount).clamp(0.0, 9999999.0);
+      _customers[idx] = cust.copyWith(pendingBalance: newBal);
+
+      final now = DateTime.now();
+
+      // Add offline payment history
+      _customerPayments.insert(
+        0,
+        CustomerPaymentModel(
+          id: 'mock_pay_${now.millisecondsSinceEpoch}',
+          customerId: cust.id ?? customerId,
           customerName: cust.name,
           customerPhone: cust.phone,
           amountPaid: amount,
-          createdAt: DateTime.now(),
-        ));
-        _saveOfflineCustomers();
+          createdAt: now,
+        ),
+      );
+
+      // Add offline receipt voucher
+      _vouchers.insert(
+        0,
+        VoucherModel(
+          voucherNumber: 'RCP-${now.millisecondsSinceEpoch.toString().substring(7)}',
+          type: 'RECEIPT',
+          partyName: cust.name,
+          partyPhone: cust.phone,
+          amount: amount,
+          paymentMode: paymentMode,
+          category: 'Customer Khata',
+          referenceNumber: referenceNumber,
+          remarks: remarks.isNotEmpty ? remarks : 'Received from ${cust.name}',
+          createdAt: now,
+        ),
+      );
+
+      _saveOfflineCustomers();
+    }
+    notifyListeners();
+
+    if (_firebaseActive) {
+      try {
+        await FirebaseService.instance.clearCustomerBalance(
+          customerId,
+          amount,
+          paymentMode: paymentMode,
+          referenceNumber: referenceNumber,
+          remarks: remarks,
+        );
+      } catch (e) {
+        debugPrint('Error syncing customer payment to Firebase: $e');
+      }
+    }
+  }
+
+  Future<void> addCustomerSale(
+    String customerId,
+    double totalAmount, {
+    double amountPaidNow = 0.0,
+    String referenceNumber = '',
+    String remarks = '',
+  }) async {
+    final cleanId = customerId.trim().toLowerCase();
+    final idx = _customers.indexWhere((cust) =>
+        (cust.id != null && cust.id!.toLowerCase() == cleanId) ||
+        cust.name.trim().toLowerCase() == cleanId);
+
+    if (idx != -1) {
+      final cust = _customers[idx];
+      final currentBal = cust.pendingBalance;
+      final netDue = (totalAmount - amountPaidNow).clamp(0.0, 9999999.0);
+      final newBal = currentBal + netDue;
+      _customers[idx] = cust.copyWith(pendingBalance: newBal);
+
+      final now = DateTime.now();
+      final refNo = referenceNumber.trim().isNotEmpty
+          ? referenceNumber.trim()
+          : 'SAL-${now.millisecondsSinceEpoch.toString().substring(7)}';
+
+      _vouchers.insert(
+        0,
+        VoucherModel(
+          voucherNumber: refNo,
+          type: 'SALE',
+          partyName: cust.name,
+          partyPhone: cust.phone,
+          amount: totalAmount,
+          paymentMode: amountPaidNow > 0 ? (amountPaidNow >= totalAmount ? 'Cash' : 'Part Payment') : 'Credit',
+          category: 'Customer Sale (Udhar)',
+          referenceNumber: refNo,
+          remarks: remarks.isNotEmpty ? remarks : 'Manual Sale / Udhar to ${cust.name}',
+          createdAt: now,
+        ),
+      );
+
+      if (amountPaidNow > 0) {
+        _customerPayments.insert(
+          0,
+          CustomerPaymentModel(
+            id: 'pay_${now.millisecondsSinceEpoch}',
+            customerId: cust.id ?? customerId,
+            customerName: cust.name,
+            customerPhone: cust.phone,
+            amountPaid: amountPaidNow,
+            createdAt: now,
+          ),
+        );
+
+        _vouchers.insert(
+          0,
+          VoucherModel(
+            voucherNumber: 'RCP-${now.millisecondsSinceEpoch.toString().substring(7)}',
+            type: 'RECEIPT',
+            partyName: cust.name,
+            partyPhone: cust.phone,
+            amount: amountPaidNow,
+            paymentMode: 'Cash',
+            category: 'Customer Khata',
+            referenceNumber: refNo,
+            remarks: 'Paid against Sale #$refNo',
+            createdAt: now,
+          ),
+        );
+      }
+
+      await _saveOfflineCustomers();
+      notifyListeners();
+
+      if (_firebaseActive) {
+        try {
+          await FirebaseService.instance.updateCustomerPendingBalance(cust.id ?? customerId, newBal);
+        } catch (e) {
+          debugPrint('Error syncing customer sale to Firebase: $e');
+        }
       }
     }
   }
@@ -640,24 +762,28 @@ class DashboardProvider extends ChangeNotifier {
     }
   }
 
-  // ================= SUPPLIER CRUD =================
   Future<bool> addSupplier(SupplierModel supplier) async {
     final cleanName = supplier.name.trim().toLowerCase();
     final cleanContact = supplier.contact.trim();
 
     final exists = _suppliers.any((s) =>
-        s.name.trim().toLowerCase() == cleanName && s.contact.trim() == cleanContact);
+        s.name.trim().toLowerCase() == cleanName && (cleanContact.isEmpty || s.contact.trim() == cleanContact));
 
     if (exists) {
       return false;
     }
 
-    if (_firebaseActive) {
-      await FirebaseService.instance.createSupplier(supplier);
-    } else {
+    try {
+      final docId = await FirebaseService.instance.createSupplier(supplier);
+      final newSup = supplier.copyWith(id: docId);
+      _suppliers.add(newSup);
+      _firebaseActive = true;
+    } catch (e) {
+      debugPrint('Firebase createSupplier error: $e');
       _suppliers.add(supplier.copyWith(id: 'sup_${DateTime.now().millisecondsSinceEpoch}'));
-      notifyListeners();
     }
+
+    notifyListeners();
     return true;
   }
 
@@ -692,7 +818,10 @@ class DashboardProvider extends ChangeNotifier {
     String referenceNumber = '',
     String remarks = '',
   }) async {
-    final idx = _suppliers.indexWhere((sup) => sup.id == supplierId || sup.name.toLowerCase() == supplierId.toLowerCase());
+    final cleanId = supplierId.trim().toLowerCase();
+    final idx = _suppliers.indexWhere((sup) =>
+        (sup.id != null && sup.id!.toLowerCase() == cleanId) ||
+        sup.name.trim().toLowerCase() == cleanId);
     if (idx != -1) {
       final sup = _suppliers[idx];
       final newDue = (sup.due - amount).clamp(0.0, 9999999.0);
@@ -713,22 +842,70 @@ class DashboardProvider extends ChangeNotifier {
       );
 
       _vouchers.insert(0, voucher);
-      if (_firebaseActive) {
-        await FirebaseService.instance.createVoucher(voucher);
-      }
       notifyListeners();
+
+      if (_firebaseActive) {
+        try {
+          await FirebaseService.instance.createVoucher(voucher);
+        } catch (e) {
+          debugPrint('Error syncing payment voucher to Firebase: $e');
+        }
+      }
+      return voucher;
+    }
+    return null;
+  }
+
+  Future<VoucherModel?> addSupplierPurchase(
+    String supplierId,
+    double amount, {
+    String billNumber = '',
+    String remarks = '',
+    String paymentMode = 'Credit',
+    String partyPhone = '',
+  }) async {
+    final cleanId = supplierId.trim().toLowerCase();
+    final idx = _suppliers.indexWhere((sup) =>
+        (sup.id != null && sup.id!.toLowerCase() == cleanId) ||
+        sup.name.trim().toLowerCase() == cleanId);
+    if (idx != -1) {
+      final sup = _suppliers[idx];
+      _suppliers[idx] = sup.copyWith(due: sup.due + amount);
+
+      final vNumber = billNumber.trim().isNotEmpty
+          ? billNumber.trim()
+          : 'PUR-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
+
+      final voucher = VoucherModel(
+        voucherNumber: vNumber,
+        type: 'PURCHASE',
+        partyName: sup.name,
+        partyPhone: partyPhone.isNotEmpty ? partyPhone : sup.contact,
+        amount: amount,
+        paymentMode: paymentMode,
+        referenceNumber: billNumber,
+        category: 'Stock Purchase',
+        remarks: remarks.isNotEmpty ? remarks : 'Stock Bill Added',
+        createdAt: DateTime.now(),
+      );
+
+      _vouchers.insert(0, voucher);
+      notifyListeners();
+
+      if (_firebaseActive) {
+        try {
+          await FirebaseService.instance.createVoucher(voucher);
+        } catch (e) {
+          debugPrint('Error syncing purchase voucher to Firebase: $e');
+        }
+      }
       return voucher;
     }
     return null;
   }
 
   Future<void> addSupplierDue(String supplierId, double amount) async {
-    final idx = _suppliers.indexWhere((sup) => sup.id == supplierId || sup.name.toLowerCase() == supplierId.toLowerCase());
-    if (idx != -1) {
-      final sup = _suppliers[idx];
-      _suppliers[idx] = sup.copyWith(due: sup.due + amount);
-      notifyListeners();
-    }
+    await addSupplierPurchase(supplierId, amount);
   }
 
   // ================= TRANSACTION DELETION METHODS =================
