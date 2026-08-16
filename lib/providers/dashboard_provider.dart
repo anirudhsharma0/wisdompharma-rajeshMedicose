@@ -540,18 +540,25 @@ class DashboardProvider extends ChangeNotifier {
       return false; // Customer already registered
     }
 
-    try {
-      final docId = await FirebaseService.instance.createCustomer(customer);
-      final newCust = customer.copyWith(id: docId);
-      _customers.add(newCust);
-      _firebaseActive = true;
-    } catch (e) {
-      debugPrint('Firebase createCustomer error: $e');
-      _customers.add(customer.copyWith(id: 'mock_cust_${DateTime.now().millisecondsSinceEpoch}'));
+    final localId = customer.id ?? 'cust_${DateTime.now().millisecondsSinceEpoch}';
+    final newCust = customer.copyWith(id: localId);
+    _customers.add(newCust);
+    _saveOfflineCustomers();
+    notifyListeners();
+
+    if (_firebaseActive) {
+      FirebaseService.instance.createCustomer(customer).then((docId) {
+        final idx = _customers.indexWhere((c) => c.id == localId);
+        if (idx != -1) {
+          _customers[idx] = _customers[idx].copyWith(id: docId);
+          _saveOfflineCustomers();
+          notifyListeners();
+        }
+      }).catchError((e) {
+        debugPrint('Firebase createCustomer error: $e');
+      });
     }
 
-    await _saveOfflineCustomers();
-    notifyListeners();
     return true; // Added successfully
   }
 
@@ -561,7 +568,9 @@ class DashboardProvider extends ChangeNotifier {
     notifyListeners();
 
     if (_firebaseActive) {
-      await FirebaseService.instance.batchCreateCustomers(customerList);
+      FirebaseService.instance.batchCreateCustomers(customerList).catchError((e) {
+        debugPrint('Error batch creating customers in Firebase: $e');
+      });
     }
   }
 
@@ -571,11 +580,9 @@ class DashboardProvider extends ChangeNotifier {
     notifyListeners();
 
     if (_firebaseActive) {
-      try {
-        await FirebaseService.instance.deleteCustomer(customerId);
-      } catch (e) {
+      FirebaseService.instance.deleteCustomer(customerId).catchError((e) {
         debugPrint('Error deleting customer from Firebase: $e');
-      }
+      });
     }
   }
 
@@ -634,17 +641,16 @@ class DashboardProvider extends ChangeNotifier {
     notifyListeners();
 
     if (_firebaseActive) {
-      try {
-        await FirebaseService.instance.clearCustomerBalance(
-          customerId,
-          amount,
-          paymentMode: paymentMode,
-          referenceNumber: referenceNumber,
-          remarks: remarks,
-        );
-      } catch (e) {
+      FirebaseService.instance.clearCustomerBalance(
+        customerId,
+        amount,
+        paymentMode: paymentMode,
+        referenceNumber: referenceNumber,
+        remarks: remarks,
+      ).catchError((e) {
         debugPrint('Error syncing customer payment to Firebase: $e');
-      }
+        return false;
+      });
     }
   }
 
@@ -722,11 +728,9 @@ class DashboardProvider extends ChangeNotifier {
       notifyListeners();
 
       if (_firebaseActive) {
-        try {
-          await FirebaseService.instance.updateCustomerPendingBalance(cust.id ?? customerId, newBal);
-        } catch (e) {
+        FirebaseService.instance.updateCustomerPendingBalance(cust.id ?? customerId, newBal).catchError((e) {
           debugPrint('Error syncing customer sale to Firebase: $e');
-        }
+        });
       }
     }
   }
@@ -755,10 +759,14 @@ class DashboardProvider extends ChangeNotifier {
       paymentMode: 'Credit',
     );
 
+    // Instant local state update & UI notification
+    addLocalBill(bill);
+
     if (_firebaseActive) {
-      await FirebaseService.instance.createBill(bill);
-    } else {
-      addLocalBill(bill);
+      FirebaseService.instance.createBill(bill).catchError((e) {
+        debugPrint('Error syncing credit bill to Firebase: $e');
+        return <String, dynamic>{};
+      });
     }
   }
 
@@ -773,17 +781,23 @@ class DashboardProvider extends ChangeNotifier {
       return false;
     }
 
-    try {
-      final docId = await FirebaseService.instance.createSupplier(supplier);
-      final newSup = supplier.copyWith(id: docId);
-      _suppliers.add(newSup);
-      _firebaseActive = true;
-    } catch (e) {
-      debugPrint('Firebase createSupplier error: $e');
-      _suppliers.add(supplier.copyWith(id: 'sup_${DateTime.now().millisecondsSinceEpoch}'));
+    final localId = supplier.id ?? 'sup_${DateTime.now().millisecondsSinceEpoch}';
+    final newSup = supplier.copyWith(id: localId);
+    _suppliers.add(newSup);
+    notifyListeners();
+
+    if (_firebaseActive) {
+      FirebaseService.instance.createSupplier(supplier).then((docId) {
+        final idx = _suppliers.indexWhere((s) => s.id == localId);
+        if (idx != -1) {
+          _suppliers[idx] = _suppliers[idx].copyWith(id: docId);
+          notifyListeners();
+        }
+      }).catchError((e) {
+        debugPrint('Firebase createSupplier error: $e');
+      });
     }
 
-    notifyListeners();
     return true;
   }
 
@@ -796,19 +810,22 @@ class DashboardProvider extends ChangeNotifier {
       }
     }
     notifyListeners();
-    try {
-      await FirebaseService.instance.batchCreateSuppliers(newSuppliers);
-    } catch (e) {
-      debugPrint('Error batch creating suppliers in Firestore: $e');
+    if (_firebaseActive) {
+      FirebaseService.instance.batchCreateSuppliers(newSuppliers).catchError((e) {
+        debugPrint('Error batch creating suppliers in Firestore: $e');
+      });
     }
   }
 
   Future<void> deleteSupplier(String supplierId) async {
-    if (_firebaseActive) {
-      await FirebaseService.instance.deleteSupplier(supplierId);
-    }
     _suppliers.removeWhere((s) => s.id == supplierId);
     notifyListeners();
+
+    if (_firebaseActive) {
+      FirebaseService.instance.deleteSupplier(supplierId).catchError((e) {
+        debugPrint('Error deleting supplier from Firebase: $e');
+      });
+    }
   }
 
   Future<VoucherModel?> paySupplier(
@@ -845,11 +862,10 @@ class DashboardProvider extends ChangeNotifier {
       notifyListeners();
 
       if (_firebaseActive) {
-        try {
-          await FirebaseService.instance.createVoucher(voucher);
-        } catch (e) {
+        FirebaseService.instance.createVoucher(voucher).catchError((e) {
           debugPrint('Error syncing payment voucher to Firebase: $e');
-        }
+          return '';
+        });
       }
       return voucher;
     }
@@ -893,11 +909,10 @@ class DashboardProvider extends ChangeNotifier {
       notifyListeners();
 
       if (_firebaseActive) {
-        try {
-          await FirebaseService.instance.createVoucher(voucher);
-        } catch (e) {
+        FirebaseService.instance.createVoucher(voucher).catchError((e) {
           debugPrint('Error syncing purchase voucher to Firebase: $e');
-        }
+          return '';
+        });
       }
       return voucher;
     }

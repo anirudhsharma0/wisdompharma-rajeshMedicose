@@ -196,7 +196,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     final paidAmountController = TextEditingController(text: '0.0');
     final receiptNoController = TextEditingController(text: 'RCP-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}');
     String paymentMode = 'Cash';
-    bool generateReceipt = true;
+    bool generateReceipt = false;
 
     // Item input controllers
     final itemController = TextEditingController();
@@ -690,7 +690,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                                     Checkbox(
                                       value: generateReceipt,
                                       activeColor: AppColors.primary,
-                                      onChanged: (val) => setDialogState(() => generateReceipt = val ?? true),
+                                      onChanged: (val) => setDialogState(() => generateReceipt = val ?? false),
                                     ),
                                     const Text('Generate & Print Payment Receipt Slip for Supplier', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
                                   ],
@@ -1319,7 +1319,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
     final refController = TextEditingController();
     final remarksController = TextEditingController();
     String selectedMode = 'Cash';
-    bool printReceipt = true;
+    bool printReceipt = false;
 
     showDialog(
       context: context,
@@ -1456,7 +1456,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                       contentPadding: EdgeInsets.zero,
                       controlAffinity: ListTileControlAffinity.leading,
                       title: const Text('Generate & Print Payment Receipt Slip (Pink Slip Format)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                      onChanged: (val) => setDialogState(() => printReceipt = val ?? true),
+                      onChanged: (val) => setDialogState(() => printReceipt = val ?? false),
                     ),
                   ],
                 ),

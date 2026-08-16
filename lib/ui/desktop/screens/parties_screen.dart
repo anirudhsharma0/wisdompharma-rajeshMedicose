@@ -1031,7 +1031,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
     final paidAmtCtrl = TextEditingController(text: '0.0');
     final rcptNoCtrl = TextEditingController();
     String selectedMode = 'Cash';
-    bool printReceipt = true;
+    bool printReceipt = false;
 
     // Empty initial row with all 11 fields
     List<Map<String, TextEditingController>> itemRows = [
@@ -1474,7 +1474,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
                               controlAffinity: ListTileControlAffinity.leading,
                               dense: true,
                               title: const Text('Generate & Print Receipt Slip (Pink Slip)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.blue)),
-                              onChanged: (val) => setDialogState(() => printReceipt = val ?? true),
+                              onChanged: (val) => setDialogState(() => printReceipt = val ?? false),
                             ),
                           ],
                         ],

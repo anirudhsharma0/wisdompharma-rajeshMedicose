@@ -461,7 +461,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
     final refController = TextEditingController();
     final remarksController = TextEditingController();
     String selectedMode = 'Cash';
-    bool printReceipt = true;
+    bool printReceipt = false;
 
     showDialog(
       context: context,
@@ -578,7 +578,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                       contentPadding: EdgeInsets.zero,
                       controlAffinity: ListTileControlAffinity.leading,
                       title: const Text('Generate & Print Receipt Slip (Pink Slip)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                      onChanged: (val) => setDialogState(() => printReceipt = val ?? true),
+                      onChanged: (val) => setDialogState(() => printReceipt = val ?? false),
                     ),
                   ],
                 ),
@@ -788,8 +788,8 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
+        return Consumer<DashboardProvider>(
+          builder: (context, provider, child) {
             final latestSup = provider.suppliers.firstWhere(
               (s) => s.id == supplier.id || s.name.toLowerCase() == supplier.name.toLowerCase(),
               orElse: () => supplier,
@@ -1072,8 +1072,8 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
+        return Consumer<DashboardProvider>(
+          builder: (context, provider, child) {
             final latestCust = provider.customers.firstWhere(
               (c) => (customer.phone.isNotEmpty && c.phone == customer.phone) || c.name.toLowerCase() == customer.name.toLowerCase(),
               orElse: () => customer,
