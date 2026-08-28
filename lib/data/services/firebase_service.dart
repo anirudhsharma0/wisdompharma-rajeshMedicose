@@ -7,14 +7,15 @@ import '../models/inventory_model.dart';
 import '../models/customer_model.dart';
 import '../models/supplier_model.dart';
 import '../models/voucher_model.dart';
+import '../models/purchase_bill_model.dart';
 
 class FirebaseService {
   static final FirebaseService instance = FirebaseService._init();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // Static store ID for demo purposes. Can be dynamically updated upon login.
-  String storeId = 'health_plus_pharmacy_demo';
+  // Store ID for Rajesh Medicose client
+  String storeId = 'rajesh_medicose';
 
   FirebaseService._init() {
     // Enable offline persistence for Firestore if available on platform
@@ -290,9 +291,50 @@ class FirebaseService {
     }
   }
 
-  // Delete a customer profile
+  // Delete a customer profile and associated history
   Future<void> deleteCustomer(String customerId) async {
-    await _customersRef.doc(customerId).delete();
+    try {
+      final docRef = _customersRef.doc(customerId);
+      final docSnap = await docRef.get();
+      String custName = '';
+      String custPhone = '';
+
+      if (docSnap.exists) {
+        final data = docSnap.data() as Map<String, dynamic>;
+        custName = (data['name'] ?? '').toString().trim();
+        custPhone = (data['phone'] ?? '').toString().trim();
+      }
+
+      await docRef.delete();
+
+      if (custName.isNotEmpty || custPhone.isNotEmpty) {
+        final paymentsSnap = await _paymentsRef.get();
+        for (var pDoc in paymentsSnap.docs) {
+          final pData = pDoc.data() as Map<String, dynamic>;
+          final pName = (pData['customerName'] ?? '').toString().trim().toLowerCase();
+          final pPhone = (pData['customerPhone'] ?? '').toString().trim();
+          final pCustId = (pData['customerId'] ?? '').toString().trim();
+          if (pCustId == customerId ||
+              (custName.isNotEmpty && pName == custName.toLowerCase()) ||
+              (custPhone.isNotEmpty && pPhone == custPhone)) {
+            await pDoc.reference.delete();
+          }
+        }
+
+        final vouchersSnap = await _vouchersRef.get();
+        for (var vDoc in vouchersSnap.docs) {
+          final vData = vDoc.data() as Map<String, dynamic>;
+          final vName = (vData['partyName'] ?? '').toString().trim().toLowerCase();
+          final vPhone = (vData['partyPhone'] ?? '').toString().trim();
+          if ((custName.isNotEmpty && vName == custName.toLowerCase()) ||
+              (custPhone.isNotEmpty && vPhone == custPhone)) {
+            await vDoc.reference.delete();
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error in deleteCustomer: $e');
+    }
   }
 
   // Update customer pending balance
@@ -340,7 +382,35 @@ class FirebaseService {
   }
 
   Future<void> deleteSupplier(String supplierId) async {
-    await _suppliersRef.doc(supplierId).delete();
+    try {
+      final docRef = _suppliersRef.doc(supplierId);
+      final docSnap = await docRef.get();
+      String supName = '';
+      String supPhone = '';
+
+      if (docSnap.exists) {
+        final data = docSnap.data() as Map<String, dynamic>;
+        supName = (data['name'] ?? '').toString().trim();
+        supPhone = (data['contact'] ?? '').toString().trim();
+      }
+
+      await docRef.delete();
+
+      if (supName.isNotEmpty || supPhone.isNotEmpty) {
+        final vouchersSnap = await _vouchersRef.get();
+        for (var vDoc in vouchersSnap.docs) {
+          final vData = vDoc.data() as Map<String, dynamic>;
+          final vName = (vData['partyName'] ?? '').toString().trim().toLowerCase();
+          final vPhone = (vData['partyPhone'] ?? '').toString().trim();
+          if ((supName.isNotEmpty && vName == supName.toLowerCase()) ||
+              (supPhone.isNotEmpty && vPhone == supPhone)) {
+            await vDoc.reference.delete();
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error in deleteSupplier: $e');
+    }
   }
 
   CollectionReference get _paymentsRef => _storeRef.doc(storeId).collection('customer_payments');
@@ -499,6 +569,42 @@ class FirebaseService {
     });
   }
 
+  // ================= PURCHASE BILLS API =================
+
+  CollectionReference get _purchaseBillsRef => _storeRef.doc(storeId).collection('purchase_bills');
+
+  Stream<List<PurchaseBillModel>> streamPurchaseBills() {
+    return _purchaseBillsRef
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs.map((doc) {
+        return PurchaseBillModel.fromMap(doc.data() as Map<String, dynamic>, doc.id);
+      }).toList();
+    });
+  }
+
+  Future<String> createPurchaseBill(PurchaseBillModel bill) async {
+    final docRef = _purchaseBillsRef.doc();
+    final newBill = PurchaseBillModel(
+      id: docRef.id,
+      billNumber: bill.billNumber,
+      supplierName: bill.supplierName,
+      supplierPhone: bill.supplierPhone,
+      billDate: bill.billDate,
+      itemsCount: bill.itemsCount,
+      totalAmount: bill.totalAmount,
+      paidAmount: bill.paidAmount,
+      dueAmount: bill.dueAmount,
+      paymentMode: bill.paymentMode,
+      receiptNo: bill.receiptNo,
+      items: bill.items,
+      createdAt: bill.createdAt,
+    );
+    await docRef.set(newBill.toMap());
+    return docRef.id;
+  }
+
   // ================= VOUCHERS API =================
 
   CollectionReference get _vouchersRef => _storeRef.doc(storeId).collection('vouchers');
@@ -588,6 +694,44 @@ class FirebaseService {
 
   Future<void> deleteVoucher(String voucherId) async {
     await _vouchersRef.doc(voucherId).delete();
+  }
+
+  Future<void> updateSupplierDue(String supplierIdentifier, double newDue) async {
+    try {
+      final docRef = await _findSupplierDocRef(supplierIdentifier);
+      if (docRef != null) {
+        await docRef.update({'due': newDue});
+      }
+    } catch (e) {
+      debugPrint('Error updating supplier due in Firebase: $e');
+    }
+  }
+
+  Future<void> updateCustomerBalance(String customerIdentifier, double newBalance) async {
+    try {
+      final docRef = await _findCustomerDocRef(customerIdentifier);
+      if (docRef != null) {
+        await docRef.update({'pendingBalance': newBalance});
+      }
+    } catch (e) {
+      debugPrint('Error updating customer balance in Firebase: $e');
+    }
+  }
+
+  Future<void> deleteBill(String billId) async {
+    try {
+      await _billsRef.doc(billId).delete();
+    } catch (e) {
+      debugPrint('Error deleting bill from Firebase: $e');
+    }
+  }
+
+  Future<void> deleteCustomerPayment(String paymentId) async {
+    try {
+      await _paymentsRef.doc(paymentId).delete();
+    } catch (e) {
+      debugPrint('Error deleting customer payment from Firebase: $e');
+    }
   }
 
   // ================= BILL CANCEL / MODIFY API =================
@@ -693,5 +837,63 @@ class FirebaseService {
     } catch (e) {
       debugPrint('Error clearing Firestore store data: $e');
     }
+  }
+
+  // ================= DATA MIGRATION API =================
+  // One-time migration: copies all data from old demo store to rajesh_medicose store
+
+  Future<Map<String, int>> migrateFromDemoStore() async {
+    const oldStoreId = 'health_plus_pharmacy_demo';
+    final oldStoreRef = _firestore.collection('stores').doc(oldStoreId);
+    final newStoreRef = _firestore.collection('stores').doc(storeId);
+
+    final collections = [
+      'bills',
+      'inventory',
+      'customers',
+      'suppliers',
+      'vouchers',
+      'customer_payments',
+    ];
+
+    final counts = <String, int>{};
+
+    for (final colName in collections) {
+      try {
+        final oldCol = oldStoreRef.collection(colName);
+        final newCol = newStoreRef.collection(colName);
+
+        final snapshot = await oldCol.get();
+        if (snapshot.docs.isEmpty) {
+          counts[colName] = 0;
+          debugPrint('Migration: $colName — 0 documents (skipped)');
+          continue;
+        }
+
+        int migrated = 0;
+        // Process in batches of 400
+        for (var i = 0; i < snapshot.docs.length; i += 400) {
+          final chunk = snapshot.docs.sublist(
+            i,
+            (i + 400) > snapshot.docs.length ? snapshot.docs.length : i + 400,
+          );
+          final batch = _firestore.batch();
+          for (var doc in chunk) {
+            batch.set(newCol.doc(doc.id), doc.data(), SetOptions(merge: true));
+            migrated++;
+          }
+          await batch.commit();
+        }
+
+        counts[colName] = migrated;
+        debugPrint('Migration: $colName — $migrated documents copied ✓');
+      } catch (e) {
+        debugPrint('Migration error for $colName: $e');
+        counts[colName] = -1;
+      }
+    }
+
+    debugPrint('Migration complete: $counts');
+    return counts;
   }
 }

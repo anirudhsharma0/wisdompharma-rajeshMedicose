@@ -6,6 +6,9 @@ class AppColors {
   static const Color primaryLight = Color(0xFF34D399); // Light Emerald
   static const Color primaryDark = Color(0xFF047857); // Dark Emerald Green
   static const Color accent = Color(0xFF0D9488); // Teal contrast
+  static const Color teal = Color(0xFF0D9488);
+  static const Color emerald = Color(0xFF10B981);
+  static const Color slate800 = Color(0xFF1E293B);
 
   // Background and Surfaces (Clean Off-White & Pure White Card Panels)
   static const Color background = Color(0xFFF3F4F6); // Soft Light Gray (#F3F4F6)

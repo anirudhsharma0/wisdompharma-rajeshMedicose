@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+
 import '../../../core/constants/colors.dart';
 import '../../../providers/pos_provider.dart';
 import '../../../providers/dashboard_provider.dart';
@@ -9,6 +11,7 @@ import '../../../data/models/bill_model.dart';
 import '../../../data/models/customer_model.dart';
 import '../../common/widgets/custom_card.dart';
 import '../../common/widgets/receipt_preview.dart';
+import '../../common/widgets/loading_overlay.dart';
 import '../../../data/services/pdf_service.dart';
 
 
@@ -200,6 +203,7 @@ class PosBillingScreen extends StatefulWidget {
                                 prefixIcon: Icon(Icons.person, size: 18),
                                 isDense: true,
                               ),
+                              onSubmitted: (_) => processQuickSaleCheckout(shouldPrint: true),
                             ),
                           ),
                           const SizedBox(width: 10),
@@ -213,6 +217,7 @@ class PosBillingScreen extends StatefulWidget {
                                 prefixIcon: Icon(Icons.phone, size: 18),
                                 isDense: true,
                               ),
+                              onSubmitted: (_) => processQuickSaleCheckout(shouldPrint: true),
                             ),
                           ),
                         ],
@@ -240,6 +245,7 @@ class PosBillingScreen extends StatefulWidget {
                                     style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.primary, fontSize: 16),
                                     autofocus: true,
                                     onChanged: (val) => setDialogState(() {}),
+                                    onSubmitted: (_) => processQuickSaleCheckout(shouldPrint: true),
                                     decoration: const InputDecoration(
                                       labelText: 'Direct Sale Amount (₹)*',
                                       hintText: 'e.g. 500',
@@ -259,6 +265,7 @@ class PosBillingScreen extends StatefulWidget {
                                       prefixIcon: Icon(Icons.edit_note),
                                       isDense: true,
                                     ),
+                                    onSubmitted: (_) => processQuickSaleCheckout(shouldPrint: true),
                                   ),
                                 ),
                               ],
@@ -276,6 +283,7 @@ class PosBillingScreen extends StatefulWidget {
                               controller: discountCtrl,
                               keyboardType: const TextInputType.numberWithOptions(decimal: true),
                               onChanged: (val) => setDialogState(() {}),
+                              onSubmitted: (_) => processQuickSaleCheckout(shouldPrint: true),
                               decoration: const InputDecoration(
                                 labelText: 'Discount Deduction (₹)',
                                 prefixIcon: Icon(Icons.local_offer, size: 18),
@@ -283,6 +291,7 @@ class PosBillingScreen extends StatefulWidget {
                               ),
                             ),
                           ),
+
                           const SizedBox(width: 10),
                           Expanded(
                             child: DropdownButtonFormField<String>(
@@ -407,16 +416,24 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
   final TextEditingController _directAmountController = TextEditingController();
   final TextEditingController _directRemarkController = TextEditingController();
 
+  final FocusNode _screenFocusNode = FocusNode();
   final FocusNode _searchFocusNode = FocusNode();
+  final FocusNode _batchFocusNode = FocusNode();
+  final FocusNode _expiryFocusNode = FocusNode();
   final FocusNode _qtyFocusNode = FocusNode();
-  final FocusNode _custNameFocusNode = FocusNode();
   final FocusNode _mrpFocusNode = FocusNode();
+  final FocusNode _priceFocusNode = FocusNode();
+  final FocusNode _custNameFocusNode = FocusNode();
+  final FocusNode _custPhoneFocusNode = FocusNode();
+  final FocusNode _discountFocusNode = FocusNode();
+  final FocusNode _directAmountFocusNode = FocusNode();
 
   MedicineMasterModel? _selectedMasterMedicine;
   InventoryModel? _matchedInventoryItem;
 
   List<CustomerModel> _filteredCustomers = [];
   bool _showCustomerSuggestions = false;
+  bool _showVirtualNumpad = false;
 
   @override
   void initState() {
@@ -485,6 +502,57 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
     });
   }
 
+  void _onNumpadPressed(String val) {
+    TextEditingController targetCtrl;
+    if (_searchFocusNode.hasFocus) {
+      targetCtrl = _searchController;
+    } else if (_qtyFocusNode.hasFocus) {
+      targetCtrl = _qtyController;
+    } else if (_mrpFocusNode.hasFocus) {
+      targetCtrl = _mrpController;
+    } else if (_priceFocusNode.hasFocus) {
+      targetCtrl = _priceController;
+    } else if (_custNameFocusNode.hasFocus) {
+      targetCtrl = _custNameController;
+    } else if (_custPhoneFocusNode.hasFocus) {
+      targetCtrl = _custPhoneController;
+    } else if (_discountFocusNode.hasFocus) {
+      targetCtrl = _discountController;
+    } else if (_directAmountFocusNode.hasFocus) {
+      targetCtrl = _directAmountController;
+    } else {
+      targetCtrl = _qtyController;
+    }
+
+    if (val == 'CLEAR') {
+      targetCtrl.clear();
+    } else if (val == 'BACK') {
+      if (targetCtrl.text.isNotEmpty) {
+        targetCtrl.text = targetCtrl.text.substring(0, targetCtrl.text.length - 1);
+      }
+    } else if (val == 'ENTER') {
+      final posProvider = Provider.of<PosProvider>(context, listen: false);
+      final dashProvider = Provider.of<DashboardProvider>(context, listen: false);
+      if (targetCtrl == _searchController || targetCtrl == _qtyController || targetCtrl == _mrpController || targetCtrl == _priceController) {
+        _addItemToCart(posProvider);
+      } else if (targetCtrl == _directAmountController) {
+        _addDirectAmountToCart(posProvider);
+      } else {
+        _triggerCheckout(posProvider, dashProvider, shouldPrint: true);
+      }
+    } else if (val == '+') {
+      final curVal = int.tryParse(targetCtrl.text) ?? 1;
+      targetCtrl.text = (curVal + 1).toString();
+    } else if (val == '-') {
+      final curVal = int.tryParse(targetCtrl.text) ?? 1;
+      if (curVal > 1) {
+        targetCtrl.text = (curVal - 1).toString();
+      }
+    } else {
+      targetCtrl.text = targetCtrl.text + val;
+    }
+  }
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -499,12 +567,21 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
     _discountController.dispose();
     _directAmountController.dispose();
     _directRemarkController.dispose();
+
+    _screenFocusNode.dispose();
     _searchFocusNode.dispose();
+    _batchFocusNode.dispose();
+    _expiryFocusNode.dispose();
     _qtyFocusNode.dispose();
-    _custNameFocusNode.dispose();
     _mrpFocusNode.dispose();
+    _priceFocusNode.dispose();
+    _custNameFocusNode.dispose();
+    _custPhoneFocusNode.dispose();
+    _discountFocusNode.dispose();
+    _directAmountFocusNode.dispose();
     super.dispose();
   }
+
 
   void _addDirectAmountToCart(PosProvider posProvider) {
     final amt = double.tryParse(_directAmountController.text) ?? 0.0;
@@ -766,7 +843,15 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
     }
 
     // Checkout with inventory stock revalidation
-    final result = await posProvider.checkout(currentInventory: dashProvider.inventory);
+    AppLoadingOverlay.show(context, message: 'Generating POS Bill & Updating Stock...');
+    Map<String, dynamic> result;
+    try {
+      result = await posProvider.checkout(currentInventory: dashProvider.inventory);
+    } finally {
+      if (mounted) {
+        AppLoadingOverlay.hide(context);
+      }
+    }
 
     if (result['success'] == true) {
       final BillModel completedBill = result['bill'];
@@ -873,836 +958,1089 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
       } catch (_) {}
     }
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return KeyboardListener(
+      focusNode: _screenFocusNode,
+      autofocus: true,
+      onKeyEvent: (KeyEvent event) {
+        if (event is KeyDownEvent) {
+          final key = event.logicalKey;
+          if (key == LogicalKeyboardKey.f2) {
+            _searchFocusNode.requestFocus();
+          } else if (key == LogicalKeyboardKey.f3) {
+            _custNameFocusNode.requestFocus();
+          } else if (key == LogicalKeyboardKey.f4) {
+            PosBillingScreen.openQuickSaleDialog(context);
+          } else if (key == LogicalKeyboardKey.f9) {
+            _triggerCheckout(posProvider, dashProvider, shouldPrint: false);
+          } else if (key == LogicalKeyboardKey.f12) {
+            _triggerCheckout(posProvider, dashProvider, shouldPrint: true);
+          } else if (key == LogicalKeyboardKey.escape) {
+            posProvider.resetCart();
+            _custNameController.clear();
+            _custPhoneController.clear();
+            _discountController.text = '0';
+            _searchFocusNode.requestFocus();
+          }
+        }
+      },
+      child: Column(
         children: [
-          // LEFT / MAIN PANEL: Medicine Details Form + Cart Items Table (Flex 4 - Compact)
+          _buildKeyboardShortcutsHeader(context),
+          if (_showVirtualNumpad)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+              child: _buildVirtualNumpadDrawer(posProvider, dashProvider),
+            ),
           Expanded(
-            flex: 4,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Top Pinned Card: Billing Item Details & Medicine Lookup
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    CustomCard(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text(
-                                'Billing Item Details',
-                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.primaryLight),
-                              ),
-                              TextButton.icon(
-                                onPressed: () => _showAddManualItemDialog(context, posProvider),
-                                icon: const Icon(Icons.add_circle, size: 15, color: AppColors.primary),
-                                label: const Text(
-                                  'Add Manual Amount',
-                                  style: TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.bold),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-
-                          // Search & Medicine Name Input
-                          TextField(
-                            controller: _searchController,
-                            focusNode: _searchFocusNode,
-                            onChanged: posProvider.searchMedicines,
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                            decoration: InputDecoration(
-                              labelText: 'Medicine / Item Name (Type or Search brand/salt)',
-                              hintText: 'Search brand name or salt composition...',
-                              prefixIcon: const Icon(Icons.search, color: AppColors.primary, size: 20),
-                              contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-                              suffixIcon: _searchController.text.isNotEmpty
-                                  ? IconButton(
-                                      icon: const Icon(Icons.clear, color: AppColors.textSecondary, size: 18),
-                                      onPressed: () {
-                                        _searchController.clear();
-                                        _medicineNameController.clear();
-                                        posProvider.searchMedicines('');
-                                        setState(() {
-                                          _selectedMasterMedicine = null;
-                                          _matchedInventoryItem = null;
-                                        });
-                                      },
-                                    )
-                                  : null,
-                            ),
-                          ),
-                          if (posProvider.isSearching)
-                            const Padding(
-                              padding: EdgeInsets.only(top: 6.0),
-                              child: Center(child: LinearProgressIndicator(minHeight: 2)),
-                            ),
-
-                          if (_selectedMasterMedicine != null) ...[
-                            const SizedBox(height: 8),
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: AppColors.primary.withValues(alpha: 0.08),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.check_circle, color: AppColors.primary, size: 18),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Selected: ${_selectedMasterMedicine!.medicineName}',
-                                          style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary, fontSize: 13),
-                                        ),
-                                        Text(
-                                          'Salt: ${_selectedMasterMedicine!.composition ?? "N/A"} | Mfr: ${_selectedMasterMedicine!.manufacturer ?? "N/A"}',
-                                          style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 10),
-
-                          // Item Attributes: Batch, Expiry, Qty, MRP, Sale Price
-                          Row(
-                            children: [
-                              Expanded(
-                                flex: 2,
-                                child: TextField(
-                                  controller: _batchController,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Batch Number',
-                                    hintText: 'e.g. BT-9382',
-                                    contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: TextField(
-                                  controller: _expiryController,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Expiry Date',
-                                    hintText: 'YYYY-MM',
-                                    contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 1,
-                                child: TextField(
-                                  controller: _qtyController,
-                                  focusNode: _qtyFocusNode,
-                                  keyboardType: TextInputType.number,
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
-                                  decoration: const InputDecoration(
-                                    labelText: 'Qty',
-                                    contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: TextField(
-                                  controller: _mrpController,
-                                  focusNode: _mrpFocusNode,
-                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                  decoration: const InputDecoration(
-                                    labelText: 'MRP (₹)',
-                                    contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: TextField(
-                                  controller: _priceController,
-                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.accent),
-                                  decoration: const InputDecoration(
-                                    labelText: 'Sale Rate (₹)',
-                                    contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-
-                          // Warnings & Intelligence
-                          if (_matchedInventoryItem != null) ...[
-                            if (showLowStockWarning)
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: AppColors.warning.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text('⚠️ Low Stock Alert: Only $currentStockCount pack(s) remaining in stock.', style: const TextStyle(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.bold)),
-                              ),
-                            if (showExpiryWarning)
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: AppColors.error.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text('🚨 Expiry Alert: Batch expiring soon (${_matchedInventoryItem!.expiryDate}).', style: const TextStyle(color: AppColors.error, fontSize: 12, fontWeight: FontWeight.bold)),
-                              ),
-                            const SizedBox(height: 8),
-                          ],
-
-                          // Add to Cart Action Button
-                          ElevatedButton.icon(
-                            onPressed: () => _addItemToCart(posProvider),
-                            icon: const Icon(Icons.add_shopping_cart, size: 18),
-                            label: const Text('Add to Cart', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primary,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    // Floating Search Dropdown Overlay
-                    if (_searchFocusNode.hasFocus &&
-                        !posProvider.isSearching &&
-                        _searchController.text.trim().isNotEmpty &&
-                        _selectedMasterMedicine == null)
-                      Positioned(
-                        top: 85,
-                        left: 14,
-                        right: 14,
-                        child: Container(
-                          height: 220,
-                          decoration: BoxDecoration(
-                            color: AppColors.surface,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: AppColors.border),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.25),
-                                blurRadius: 10,
-                                offset: const Offset(0, 5),
-                              )
-                            ],
-                          ),
-                          child: ListView.separated(
-                            shrinkWrap: true,
-                            itemCount: posProvider.searchResults.length + 1,
-                            separatorBuilder: (_, _) => const Divider(color: AppColors.border, height: 1),
-                            itemBuilder: (context, index) {
-                              final queryText = _searchController.text.trim();
-                              if (index == 0) {
-                                return ListTile(
-                                  dense: true,
-                                  leading: const Icon(Icons.add, color: AppColors.primaryLight, size: 20),
-                                  title: Text(
-                                    'Use "$queryText" manually',
-                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primaryLight),
-                                  ),
-                                  subtitle: const Text('Tap to enter custom price/details manually', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
-                                  onTap: () {
-                                    setState(() {
-                                      _selectedMasterMedicine = null;
-                                      _matchedInventoryItem = null;
-                                      _medicineNameController.text = queryText;
-                                      _batchController.text = 'BATCH-${DateTime.now().year % 100}${DateTime.now().month}';
-                                      _expiryController.text = '${DateTime.now().year + 2}-${DateTime.now().month.toString().padLeft(2, '0')}';
-                                      _mrpController.clear();
-                                      _priceController.clear();
-                                    });
-                                    posProvider.searchMedicines('');
-                                    _mrpFocusNode.requestFocus();
-                                  },
-                                );
-                              }
-
-                              final med = posProvider.searchResults[index - 1];
-                              final hasStock = dashProvider.inventory.any(
-                                (item) => item.medicineName.toLowerCase() == med.medicineName.toLowerCase()
-                              );
-
-                              return ListTile(
-                                dense: true,
-                                title: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        med.medicineName,
-                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                                      ),
-                                    ),
-                                    if (hasStock)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: AppColors.success.withValues(alpha: 0.2),
-                                          borderRadius: BorderRadius.circular(4),
-                                        ),
-                                        child: const Text('In Stock', style: TextStyle(color: AppColors.success, fontSize: 9, fontWeight: FontWeight.bold)),
-                                      ),
-                                  ],
-                                ),
-                                subtitle: Text('Composition: ${med.composition ?? "N/A"} | Manufacturer: ${med.manufacturer ?? "Unknown"}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
-                                trailing: Text('₹${med.mrp.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold)),
-                                onTap: () {
-                                  _selectMedicine(med, dashProvider.inventory);
-                                  posProvider.searchMedicines('');
-                                },
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-
-                // Bottom Cart Table Card (Under Billing Item Details)
-                Expanded(
-                  child: CustomCard(
-                    padding: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // LEFT / MAIN PANEL: Medicine Details Form + Cart Items Table (Flex 4 - Compact)
+                  Expanded(
+                    flex: 4,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.all(12.0),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Row(
+                        // Top Pinned Card: Billing Item Details & Medicine Lookup
+                        Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            CustomCard(
+                              padding: const EdgeInsets.all(14),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  const Icon(Icons.shopping_cart, color: AppColors.primary, size: 20),
-                                  const SizedBox(width: 8),
-                                  const Text(
-                                    'Active Billing Receipt Cart',
-                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.primaryLight),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      const Text(
+                                        'Billing Item Details',
+                                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.primaryLight),
+                                      ),
+                                      TextButton.icon(
+                                        onPressed: () => _showAddManualItemDialog(context, posProvider),
+                                        icon: const Icon(Icons.add_circle, size: 15, color: AppColors.primary),
+                                        label: const Text(
+                                          'Add Manual Amount',
+                                          style: TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+
+                                  // Search & Medicine Name Input
+                                  TextField(
+                                    controller: _searchController,
+                                    focusNode: _searchFocusNode,
+                                    onChanged: posProvider.searchMedicines,
+                                    onSubmitted: (_) => _addItemToCart(posProvider),
+                                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                                    decoration: InputDecoration(
+                                      labelText: 'Medicine / Item Name (Type or Search brand/salt)',
+                                      hintText: 'Search brand name or salt composition...',
+                                      prefixIcon: const Icon(Icons.search, color: AppColors.primary, size: 20),
+                                      contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                                      suffixIcon: _searchController.text.isNotEmpty
+                                          ? IconButton(
+                                              icon: const Icon(Icons.clear, color: AppColors.textSecondary, size: 18),
+                                              onPressed: () {
+                                                _searchController.clear();
+                                                _medicineNameController.clear();
+                                                posProvider.searchMedicines('');
+                                                setState(() {
+                                                  _selectedMasterMedicine = null;
+                                                  _matchedInventoryItem = null;
+                                                });
+                                              },
+                                            )
+                                          : null,
+                                    ),
+                                  ),
+                                  if (posProvider.isSearching)
+                                    const Padding(
+                                      padding: EdgeInsets.only(top: 6.0),
+                                      child: Center(child: LinearProgressIndicator(minHeight: 2)),
+                                    ),
+
+                                  if (_selectedMasterMedicine != null) ...[
+                                    const SizedBox(height: 8),
+                                    Container(
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.primary.withValues(alpha: 0.08),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          const Icon(Icons.check_circle, color: AppColors.primary, size: 18),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  'Selected: ${_selectedMasterMedicine!.medicineName}',
+                                                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary, fontSize: 13),
+                                                ),
+                                                Text(
+                                                  'Salt: ${_selectedMasterMedicine!.composition ?? "N/A"} | Mfr: ${_selectedMasterMedicine!.manufacturer ?? "N/A"}',
+                                                  style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 10),
+
+                                  // Item Attributes: Batch, Expiry, Qty, MRP, Sale Price
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        flex: 2,
+                                        child: TextField(
+                                          controller: _batchController,
+                                          focusNode: _batchFocusNode,
+                                          onSubmitted: (_) => _addItemToCart(posProvider),
+                                          decoration: const InputDecoration(
+                                            labelText: 'Batch Number',
+                                            hintText: 'e.g. BT-9382',
+                                            contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        flex: 2,
+                                        child: TextField(
+                                          controller: _expiryController,
+                                          focusNode: _expiryFocusNode,
+                                          onSubmitted: (_) => _addItemToCart(posProvider),
+                                          decoration: const InputDecoration(
+                                            labelText: 'Expiry Date',
+                                            hintText: 'YYYY-MM',
+                                            contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        flex: 1,
+                                        child: TextField(
+                                          controller: _qtyController,
+                                          focusNode: _qtyFocusNode,
+                                          keyboardType: TextInputType.number,
+                                          onSubmitted: (_) => _addItemToCart(posProvider),
+                                          style: const TextStyle(fontWeight: FontWeight.bold),
+                                          decoration: const InputDecoration(
+                                            labelText: 'Qty',
+                                            contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        flex: 2,
+                                        child: TextField(
+                                          controller: _mrpController,
+                                          focusNode: _mrpFocusNode,
+                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                          onSubmitted: (_) => _addItemToCart(posProvider),
+                                          decoration: const InputDecoration(
+                                            labelText: 'MRP (₹)',
+                                            contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        flex: 2,
+                                        child: TextField(
+                                          controller: _priceController,
+                                          focusNode: _priceFocusNode,
+                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                          onSubmitted: (_) => _addItemToCart(posProvider),
+                                          style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.accent),
+                                          decoration: const InputDecoration(
+                                            labelText: 'Sale Rate (₹)',
+                                            contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+
+                                  const SizedBox(height: 10),
+
+                                  // Warnings & Intelligence
+                                  if (_matchedInventoryItem != null) ...[
+                                    if (showLowStockWarning)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.warning.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text('⚠️ Low Stock Alert: Only $currentStockCount pack(s) remaining in stock.', style: const TextStyle(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.bold)),
+                                      ),
+                                    if (showExpiryWarning)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.error.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text('🚨 Expiry Alert: Batch expiring soon (${_matchedInventoryItem!.expiryDate}).', style: const TextStyle(color: AppColors.error, fontSize: 12, fontWeight: FontWeight.bold)),
+                                      ),
+                                    const SizedBox(height: 8),
+                                  ],
+
+                                  // Add to Cart Action Button
+                                  ElevatedButton.icon(
+                                    onPressed: () => _addItemToCart(posProvider),
+                                    icon: const Icon(Icons.add_shopping_cart, size: 18),
+                                    label: const Text('Add to Cart [Enter]', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: AppColors.primary,
+                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                    ),
                                   ),
                                 ],
                               ),
-                              Text(
-                                '${posProvider.cartItems.length} Item(s) Added',
-                                style: const TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.bold, fontSize: 13),
-                              )
-                            ],
-                          ),
-                        ),
-                        const Divider(color: AppColors.border, height: 1),
-                        Expanded(
-                          child: posProvider.cartItems.isEmpty
-                              ? Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: const [
-                                      Icon(Icons.shopping_basket_outlined, size: 54, color: AppColors.textMuted),
-                                      SizedBox(height: 10),
-                                      Text(
-                                        'Your POS Cart is Empty.\nSearch or enter medicine details above and click "Add to Cart".',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(color: AppColors.textMuted, fontSize: 14),
+                            ),
+
+                            // Floating Search Dropdown Overlay
+                            if (_searchFocusNode.hasFocus &&
+                                !posProvider.isSearching &&
+                                _searchController.text.trim().isNotEmpty &&
+                                _selectedMasterMedicine == null)
+                              Positioned(
+                                top: 85,
+                                left: 14,
+                                right: 14,
+                                child: Container(
+                                  height: 220,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.surface,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: AppColors.border),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(alpha: 0.25),
+                                        blurRadius: 10,
+                                        offset: const Offset(0, 5),
                                       )
                                     ],
                                   ),
-                                )
-                              : SingleChildScrollView(
-                                  child: DataTable(
-                                    headingRowColor: WidgetStateProperty.all(AppColors.border.withValues(alpha: 0.3)),
-                                    columnSpacing: 16,
-                                    columns: const [
-                                      DataColumn(label: Text('#', style: TextStyle(fontWeight: FontWeight.bold))),
-                                      DataColumn(label: Text('Medicine', style: TextStyle(fontWeight: FontWeight.bold))),
-                                      DataColumn(label: Text('Batch', style: TextStyle(fontWeight: FontWeight.bold))),
-                                      DataColumn(label: Text('Qty', style: TextStyle(fontWeight: FontWeight.bold))),
-                                      DataColumn(label: Text('MRP', style: TextStyle(fontWeight: FontWeight.bold))),
-                                      DataColumn(label: Text('Rate', style: TextStyle(fontWeight: FontWeight.bold))),
-                                      DataColumn(label: Text('Total', style: TextStyle(fontWeight: FontWeight.bold))),
-                                      DataColumn(label: Text('Actions', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    ],
-                                    rows: List.generate(
-                                      posProvider.cartItems.length,
-                                      (index) {
-                                        final item = posProvider.cartItems[index];
-                                        return DataRow(
-                                          cells: [
-                                            DataCell(Text((index + 1).toString())),
-                                            DataCell(
-                                              SizedBox(
-                                                width: 180,
-                                                child: Column(
-                                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                                  mainAxisAlignment: MainAxisAlignment.center,
-                                                  children: [
-                                                    Text(
-                                                      item.medicineName,
-                                                      style: const TextStyle(fontWeight: FontWeight.w600),
-                                                      overflow: TextOverflow.ellipsis,
-                                                    ),
-                                                    if (item.substitutes != null && item.substitutes!.isNotEmpty)
-                                                      Text(
-                                                        'Salt: ${item.substitutes}',
-                                                        style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
-                                                        overflow: TextOverflow.ellipsis,
-                                                      ),
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                            DataCell(Text(item.batchNumber)),
-                                            DataCell(
-                                              Row(
-                                                children: [
-                                                  IconButton(
-                                                    icon: const Icon(Icons.remove_circle_outline, size: 16, color: AppColors.primaryLight),
-                                                    padding: EdgeInsets.zero,
-                                                    constraints: const BoxConstraints(),
-                                                    onPressed: () => posProvider.updateItemQuantity(index, item.quantity - 1),
-                                                  ),
-                                                  Padding(
-                                                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                                                    child: Text(item.quantity.toString(), style: const TextStyle(fontWeight: FontWeight.bold)),
-                                                  ),
-                                                  IconButton(
-                                                    icon: const Icon(Icons.add_circle_outline, size: 16, color: AppColors.primaryLight),
-                                                    padding: EdgeInsets.zero,
-                                                    constraints: const BoxConstraints(),
-                                                    onPressed: () => posProvider.updateItemQuantity(index, item.quantity + 1),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            DataCell(Text('₹${item.mrp.toStringAsFixed(2)}')),
-                                            DataCell(Text('₹${item.salePrice.toStringAsFixed(2)}')),
-                                            DataCell(Text('₹${item.totalPrice.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold))),
-                                            DataCell(
-                                              IconButton(
-                                                icon: const Icon(Icons.delete, color: AppColors.error, size: 18),
-                                                onPressed: () => posProvider.removeItem(index),
-                                              ),
-                                            ),
-                                          ],
+                                  child: ListView.separated(
+                                    shrinkWrap: true,
+                                    itemCount: posProvider.searchResults.length + 1,
+                                    separatorBuilder: (_, _) => const Divider(color: AppColors.border, height: 1),
+                                    itemBuilder: (context, index) {
+                                      final queryText = _searchController.text.trim();
+                                      if (index == 0) {
+                                        return ListTile(
+                                          dense: true,
+                                          leading: const Icon(Icons.add, color: AppColors.primaryLight, size: 20),
+                                          title: Text(
+                                            'Use "$queryText" manually',
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primaryLight),
+                                          ),
+                                          subtitle: const Text('Tap to enter custom price/details manually', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                                          onTap: () {
+                                            setState(() {
+                                              _selectedMasterMedicine = null;
+                                              _matchedInventoryItem = null;
+                                              _medicineNameController.text = queryText;
+                                              _batchController.text = 'BATCH-${DateTime.now().year % 100}${DateTime.now().month}';
+                                              _expiryController.text = '${DateTime.now().year + 2}-${DateTime.now().month.toString().padLeft(2, '0')}';
+                                              _mrpController.clear();
+                                              _priceController.clear();
+                                            });
+                                            posProvider.searchMedicines('');
+                                            _mrpFocusNode.requestFocus();
+                                          },
                                         );
-                                      },
-                                    ),
+                                      }
+
+                                      final med = posProvider.searchResults[index - 1];
+                                      final hasStock = dashProvider.inventory.any(
+                                        (item) => item.medicineName.toLowerCase() == med.medicineName.toLowerCase()
+                                      );
+
+                                      return ListTile(
+                                        dense: true,
+                                        title: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                med.medicineName,
+                                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                              ),
+                                            ),
+                                            if (hasStock)
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: AppColors.success.withValues(alpha: 0.2),
+                                                  borderRadius: BorderRadius.circular(4),
+                                                ),
+                                                child: const Text('In Stock', style: TextStyle(color: AppColors.success, fontSize: 9, fontWeight: FontWeight.bold)),
+                                              ),
+                                          ],
+                                        ),
+                                        subtitle: Text('Composition: ${med.composition ?? "N/A"} | Manufacturer: ${med.manufacturer ?? "Unknown"}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                                        trailing: Text('₹${med.mrp.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold)),
+                                        onTap: () {
+                                          _selectMedicine(med, dashProvider.inventory);
+                                          posProvider.searchMedicines('');
+                                        },
+                                      );
+                                    },
                                   ),
                                 ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+
+                        // Bottom Cart Table Card (Under Billing Item Details)
+                        Expanded(
+                          child: CustomCard(
+                            padding: EdgeInsets.zero,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.all(12.0),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.shopping_cart, color: AppColors.primary, size: 20),
+                                          const SizedBox(width: 8),
+                                          const Text(
+                                            'Active Billing Receipt Cart',
+                                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.primaryLight),
+                                          ),
+                                        ],
+                                      ),
+                                      Text(
+                                        '${posProvider.cartItems.length} Item(s) Added',
+                                        style: const TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.bold, fontSize: 13),
+                                      )
+                                    ],
+                                  ),
+                                ),
+                                const Divider(color: AppColors.border, height: 1),
+                                Expanded(
+                                  child: posProvider.cartItems.isEmpty
+                                      ? Center(
+                                          child: Column(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: const [
+                                              Icon(Icons.shopping_basket_outlined, size: 54, color: AppColors.textMuted),
+                                              SizedBox(height: 10),
+                                              Text(
+                                                'Your POS Cart is Empty.\nSearch or enter medicine details above and press Enter / Numpad Enter.',
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(color: AppColors.textMuted, fontSize: 14),
+                                              )
+                                            ],
+                                          ),
+                                        )
+                                      : SingleChildScrollView(
+                                          child: DataTable(
+                                            headingRowColor: WidgetStateProperty.all(AppColors.border.withValues(alpha: 0.3)),
+                                            columnSpacing: 16,
+                                            columns: const [
+                                              DataColumn(label: Text('#', style: TextStyle(fontWeight: FontWeight.bold))),
+                                              DataColumn(label: Text('Medicine', style: TextStyle(fontWeight: FontWeight.bold))),
+                                              DataColumn(label: Text('Batch', style: TextStyle(fontWeight: FontWeight.bold))),
+                                              DataColumn(label: Text('Qty', style: TextStyle(fontWeight: FontWeight.bold))),
+                                              DataColumn(label: Text('MRP', style: TextStyle(fontWeight: FontWeight.bold))),
+                                              DataColumn(label: Text('Rate', style: TextStyle(fontWeight: FontWeight.bold))),
+                                              DataColumn(label: Text('Total', style: TextStyle(fontWeight: FontWeight.bold))),
+                                              DataColumn(label: Text('Actions', style: TextStyle(fontWeight: FontWeight.bold))),
+                                            ],
+                                            rows: List.generate(
+                                              posProvider.cartItems.length,
+                                              (index) {
+                                                final item = posProvider.cartItems[index];
+                                                return DataRow(
+                                                  cells: [
+                                                    DataCell(Text((index + 1).toString())),
+                                                    DataCell(
+                                                      SizedBox(
+                                                        width: 180,
+                                                        child: Column(
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          mainAxisAlignment: MainAxisAlignment.center,
+                                                          children: [
+                                                            Text(
+                                                              item.medicineName,
+                                                              style: const TextStyle(fontWeight: FontWeight.w600),
+                                                              overflow: TextOverflow.ellipsis,
+                                                            ),
+                                                            if (item.substitutes != null && item.substitutes!.isNotEmpty)
+                                                              Text(
+                                                                'Salt: ${item.substitutes}',
+                                                                style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
+                                                                overflow: TextOverflow.ellipsis,
+                                                              ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    DataCell(Text(item.batchNumber)),
+                                                    DataCell(
+                                                      Row(
+                                                        children: [
+                                                          IconButton(
+                                                            icon: const Icon(Icons.remove_circle_outline, size: 16, color: AppColors.primaryLight),
+                                                            padding: EdgeInsets.zero,
+                                                            constraints: const BoxConstraints(),
+                                                            onPressed: () => posProvider.updateItemQuantity(index, item.quantity - 1),
+                                                          ),
+                                                          Padding(
+                                                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                                                            child: Text(item.quantity.toString(), style: const TextStyle(fontWeight: FontWeight.bold)),
+                                                          ),
+                                                          IconButton(
+                                                            icon: const Icon(Icons.add_circle_outline, size: 16, color: AppColors.primaryLight),
+                                                            padding: EdgeInsets.zero,
+                                                            constraints: const BoxConstraints(),
+                                                            onPressed: () => posProvider.updateItemQuantity(index, item.quantity + 1),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                    DataCell(Text('₹${item.mrp.toStringAsFixed(2)}')),
+                                                    DataCell(Text('₹${item.salePrice.toStringAsFixed(2)}')),
+                                                    DataCell(Text('₹${item.totalPrice.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold))),
+                                                    DataCell(
+                                                      IconButton(
+                                                        icon: const Icon(Icons.delete, color: AppColors.error, size: 18),
+                                                        onPressed: () => posProvider.removeItem(index),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                        ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                       ],
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 16),
+                  const SizedBox(width: 16),
 
-          // RIGHT PANEL: Customer Details & Checkout Sidebar (Flex 6 - MAIN & ENLARGED UI)
-          Expanded(
-            flex: 6,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                CustomCard(
-                  padding: const EdgeInsets.all(16),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                  // RIGHT PANEL: Customer Details & Checkout Sidebar (Flex 6 - MAIN & ENLARGED UI)
+                  Expanded(
+                    flex: 6,
+                    child: Stack(
+                      clipBehavior: Clip.none,
                       children: [
-                        // Header
-                        Row(
-                          children: const [
-                            Icon(Icons.person_pin, color: AppColors.primary, size: 24),
-                            SizedBox(width: 8),
-                            Text(
-                              'Customer & Bill Checkout',
-                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        const Text('Enter customer details manually and complete settlement', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                        const Divider(color: AppColors.border, height: 24),
-
-                        // Customer Details Section (ENLARGED)
-                        const Text('CUSTOMER INFORMATION', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryLight, letterSpacing: 0.5)),
-                        const SizedBox(height: 10),
-                        TextField(
-                          controller: _custNameController,
-                          focusNode: _custNameFocusNode,
-                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                          decoration: InputDecoration(
-                            labelText: 'Customer Name (Type or Select)',
-                            hintText: 'e.g. Rahul Sharma / Walk-in Customer',
-                            prefixIcon: const Icon(Icons.person, size: 20, color: AppColors.primary),
-                            contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: _custPhoneController,
-                          keyboardType: TextInputType.phone,
-                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                          decoration: InputDecoration(
-                            labelText: 'Customer Mobile Phone',
-                            hintText: 'Enter 10-digit phone number',
-                            prefixIcon: const Icon(Icons.phone, size: 20, color: AppColors.primary),
-                            contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                        ),
-                        const Divider(color: AppColors.border, height: 24),
-
-                        // Direct Quick Amount Entry (ENLARGED)
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: const [
-                                  Icon(Icons.bolt, color: Colors.amber, size: 20),
-                                  SizedBox(width: 6),
-                                  Text(
-                                    'Direct Sale (Quick Amount)',
-                                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primaryLight),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    flex: 3,
-                                    child: TextField(
-                                      controller: _directAmountController,
-                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                      style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.accent, fontSize: 16),
-                                      decoration: InputDecoration(
-                                        hintText: 'Enter ₹ Amount',
-                                        prefixIcon: const Icon(Icons.currency_rupee, size: 18, color: AppColors.accent),
-                                        contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    flex: 4,
-                                    child: TextField(
-                                      controller: _directRemarkController,
-                                      style: const TextStyle(fontSize: 13),
-                                      decoration: InputDecoration(
-                                        hintText: 'Description / Item',
-                                        contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              SizedBox(
-                                width: double.infinity,
-                                child: ElevatedButton.icon(
-                                  onPressed: () => _addDirectAmountToCart(posProvider),
-                                  icon: const Icon(Icons.add_circle, size: 16),
-                                  label: const Text('Add Direct Amount to Cart', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppColors.primary,
-                                    padding: const EdgeInsets.symmetric(vertical: 10),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Divider(color: AppColors.border, height: 24),
-
-                        // Settlement Details (ENLARGED DROPDOWNS & INPUTS)
-                        const Text('DISCOUNT & PAYMENT MODE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryLight, letterSpacing: 0.5)),
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _discountController,
-                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                                decoration: InputDecoration(
-                                  labelText: 'Discount (₹)',
-                                  prefixIcon: const Icon(Icons.local_offer, size: 18, color: AppColors.textSecondary),
-                                  contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                                ),
-                                onChanged: (val) {
-                                  posProvider.setDiscount(double.tryParse(val) ?? 0.0);
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: DropdownButtonFormField<double>(
-                                initialValue: posProvider.gstPercentage,
-                                style: const TextStyle(fontSize: 14, color: AppColors.textPrimary, fontWeight: FontWeight.bold),
-                                decoration: InputDecoration(
-                                  labelText: 'GST Rate',
-                                  prefixIcon: const Icon(Icons.percent, size: 18, color: AppColors.textSecondary),
-                                  contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                                ),
-                                dropdownColor: AppColors.surface,
-                                items: [0.0, 5.0, 12.0, 18.0, 28.0]
-                                    .map((rate) => DropdownMenuItem(
-                                          value: rate,
-                                          child: Text(rate == 0.0 ? 'Exempt (0%)' : 'GST ${rate.toStringAsFixed(0)}%', style: const TextStyle(fontSize: 13)),
-                                        ))
-                                    .toList(),
-                                onChanged: (val) {
-                                  if (val != null) {
-                                    posProvider.setGstPercentage(val);
-                                  }
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        DropdownButtonFormField<String>(
-                          initialValue: posProvider.paymentMode,
-                          style: const TextStyle(fontSize: 15, color: AppColors.textPrimary, fontWeight: FontWeight.bold),
-                          decoration: InputDecoration(
-                            labelText: 'Payment Mode',
-                            prefixIcon: const Icon(Icons.payment, size: 20, color: AppColors.primary),
-                            contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                          dropdownColor: AppColors.surface,
-                          items: ['Cash', 'UPI', 'Card', 'Credit']
-                              .map((mode) => DropdownMenuItem(
-                                    value: mode,
-                                    child: Text(mode == 'Credit' ? 'Udhar (Credit Customer Ledger)' : mode, style: const TextStyle(fontSize: 14)),
-                                  ))
-                              .toList(),
-                          onChanged: (val) {
-                            if (val != null) {
-                              posProvider.setPaymentMode(val);
-                            }
-                          },
-                        ),
-                        const SizedBox(height: 16),
-
-                        // Financial Tally Summary Box (ENLARGED)
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: AppColors.surface,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.15),
-                                blurRadius: 6,
-                                offset: const Offset(0, 3),
-                              )
-                            ],
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text('Subtotal / Gross:', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                                  Text('₹${posProvider.totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text('Discount Applied:', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                                  Text('-₹${posProvider.discount.toStringAsFixed(2)}', style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 14)),
-                                ],
-                              ),
-                              if (posProvider.gstAmount > 0) ...[
-                                const SizedBox(height: 4),
+                        CustomCard(
+                          padding: const EdgeInsets.all(16),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                // Header
                                 Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: const [
+                                    Icon(Icons.person_pin, color: AppColors.primary, size: 24),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Customer & Bill Checkout',
+                                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                const Text('Enter customer details manually and complete settlement', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                                const Divider(color: AppColors.border, height: 24),
+
+                                // Customer Details Section (ENLARGED)
+                                const Text('CUSTOMER INFORMATION', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryLight, letterSpacing: 0.5)),
+                                const SizedBox(height: 10),
+                                TextField(
+                                  controller: _custNameController,
+                                  focusNode: _custNameFocusNode,
+                                  onSubmitted: (_) => _triggerCheckout(posProvider, dashProvider, shouldPrint: false),
+                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                                  decoration: InputDecoration(
+                                    labelText: 'Customer Name (Type or Select)',
+                                    hintText: 'e.g. Rahul Sharma / Walk-in Customer',
+                                    prefixIcon: const Icon(Icons.person, size: 20, color: AppColors.primary),
+                                    contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _custPhoneController,
+                                  focusNode: _custPhoneFocusNode,
+                                  keyboardType: TextInputType.phone,
+                                  onSubmitted: (_) => _triggerCheckout(posProvider, dashProvider, shouldPrint: false),
+                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                                  decoration: InputDecoration(
+                                    labelText: 'Customer Mobile Phone',
+                                    hintText: 'Enter 10-digit phone number',
+                                    prefixIcon: const Icon(Icons.phone, size: 20, color: AppColors.primary),
+                                    contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                ),
+                                const Divider(color: AppColors.border, height: 24),
+
+                                // Direct Quick Amount Entry (ENLARGED)
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.primary.withValues(alpha: 0.08),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: const [
+                                          Icon(Icons.bolt, color: Colors.amber, size: 20),
+                                          SizedBox(width: 6),
+                                          Text(
+                                            'Direct Sale (Quick Amount)',
+                                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primaryLight),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            flex: 3,
+                                            child: TextField(
+                                              controller: _directAmountController,
+                                              focusNode: _directAmountFocusNode,
+                                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                              onSubmitted: (_) => _addDirectAmountToCart(posProvider),
+                                              style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.accent, fontSize: 16),
+                                              decoration: InputDecoration(
+                                                hintText: 'Enter ₹ Amount',
+                                                prefixIcon: const Icon(Icons.currency_rupee, size: 18, color: AppColors.accent),
+                                                contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+                                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            flex: 4,
+                                            child: TextField(
+                                              controller: _directRemarkController,
+                                              onSubmitted: (_) => _addDirectAmountToCart(posProvider),
+                                              style: const TextStyle(fontSize: 13),
+                                              decoration: InputDecoration(
+                                                hintText: 'Description / Item',
+                                                contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+                                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: ElevatedButton.icon(
+                                          onPressed: () => _addDirectAmountToCart(posProvider),
+                                          icon: const Icon(Icons.add_circle, size: 16),
+                                          label: const Text('Add Direct Amount to Cart', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: AppColors.primary,
+                                            padding: const EdgeInsets.symmetric(vertical: 10),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const Divider(color: AppColors.border, height: 24),
+
+                                // Settlement Details (ENLARGED DROPDOWNS & INPUTS)
+                                const Text('DISCOUNT & PAYMENT MODE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryLight, letterSpacing: 0.5)),
+                                const SizedBox(height: 10),
+                                Row(
                                   children: [
-                                    Text('GST (${posProvider.gstPercentage.toStringAsFixed(0)}%):', style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                                    Text('+₹${posProvider.gstAmount.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.primaryLight, fontWeight: FontWeight.bold, fontSize: 14)),
+                                    Expanded(
+                                      child: TextField(
+                                        controller: _discountController,
+                                        focusNode: _discountFocusNode,
+                                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                        onSubmitted: (_) => _triggerCheckout(posProvider, dashProvider, shouldPrint: true),
+                                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                                        decoration: InputDecoration(
+                                          labelText: 'Discount (₹)',
+                                          prefixIcon: const Icon(Icons.local_offer, size: 18, color: AppColors.textSecondary),
+                                          contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                        ),
+                                        onChanged: (val) {
+                                          posProvider.setDiscount(double.tryParse(val) ?? 0.0);
+                                        },
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: DropdownButtonFormField<double>(
+                                        initialValue: posProvider.gstPercentage,
+                                        style: const TextStyle(fontSize: 14, color: AppColors.textPrimary, fontWeight: FontWeight.bold),
+                                        decoration: InputDecoration(
+                                          labelText: 'GST Rate',
+                                          prefixIcon: const Icon(Icons.percent, size: 18, color: AppColors.textSecondary),
+                                          contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                        ),
+                                        dropdownColor: AppColors.surface,
+                                        items: [0.0, 5.0, 12.0, 18.0, 28.0]
+                                            .map((rate) => DropdownMenuItem(
+                                                  value: rate,
+                                                  child: Text(rate == 0.0 ? 'Exempt (0%)' : 'GST ${rate.toStringAsFixed(0)}%', style: const TextStyle(fontSize: 13)),
+                                                ))
+                                            .toList(),
+                                        onChanged: (val) {
+                                          if (val != null) {
+                                            posProvider.setGstPercentage(val);
+                                          }
+                                        },
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                DropdownButtonFormField<String>(
+                                  initialValue: posProvider.paymentMode,
+                                  style: const TextStyle(fontSize: 15, color: AppColors.textPrimary, fontWeight: FontWeight.bold),
+                                  decoration: InputDecoration(
+                                    labelText: 'Payment Mode',
+                                    prefixIcon: const Icon(Icons.payment, size: 20, color: AppColors.primary),
+                                    contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                  dropdownColor: AppColors.surface,
+                                  items: ['Cash', 'UPI', 'Card', 'Credit']
+                                      .map((mode) => DropdownMenuItem(
+                                            value: mode,
+                                            child: Text(mode == 'Credit' ? 'Udhar (Credit Customer Ledger)' : mode, style: const TextStyle(fontSize: 14)),
+                                          ))
+                                      .toList(),
+                                  onChanged: (val) {
+                                    if (val != null) {
+                                      posProvider.setPaymentMode(val);
+                                    }
+                                  },
+                                ),
+                                const SizedBox(height: 16),
+
+                                // Financial Tally Summary Box (ENLARGED)
+                                Container(
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.surface,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(alpha: 0.15),
+                                        blurRadius: 6,
+                                        offset: const Offset(0, 3),
+                                      )
+                                    ],
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          const Text('Subtotal / Gross:', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                                          Text('₹${posProvider.totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          const Text('Discount Applied:', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                                          Text('-₹${posProvider.discount.toStringAsFixed(2)}', style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 14)),
+                                        ],
+                                      ),
+                                      if (posProvider.gstAmount > 0) ...[
+                                        const SizedBox(height: 4),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text('GST (${posProvider.gstPercentage.toStringAsFixed(0)}%):', style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                                            Text('+₹${posProvider.gstAmount.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.primaryLight, fontWeight: FontWeight.bold, fontSize: 14)),
+                                          ],
+                                        ),
+                                      ],
+                                      const Divider(color: AppColors.border, height: 16),
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        crossAxisAlignment: CrossAxisAlignment.end,
+                                        children: [
+                                          Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: const [
+                                              Text('NET PAYABLE', style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                                              Text('FINAL AMOUNT', style: TextStyle(color: AppColors.primaryLight, fontSize: 12, fontWeight: FontWeight.w900)),
+                                            ],
+                                          ),
+                                          Text(
+                                            '₹${posProvider.netAmount.toStringAsFixed(2)}',
+                                            style: const TextStyle(
+                                              color: AppColors.accent,
+                                              fontSize: 26,
+                                              fontWeight: FontWeight.w900,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+
+                                // Action Checkout Buttons
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      flex: 1,
+                                      child: OutlinedButton(
+                                        onPressed: () {
+                                          posProvider.resetCart();
+                                          _custNameController.clear();
+                                          _custPhoneController.clear();
+                                          _discountController.text = '0';
+                                        },
+                                        style: OutlinedButton.styleFrom(
+                                          side: const BorderSide(color: AppColors.border),
+                                          padding: const EdgeInsets.symmetric(vertical: 14),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                        ),
+                                        child: const Text('Clear [Esc]', style: TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.bold)),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      flex: 2,
+                                      child: ElevatedButton.icon(
+                                        onPressed: () => _triggerCheckout(posProvider, dashProvider, shouldPrint: false),
+                                        icon: const Icon(Icons.check_circle_outline, size: 18),
+                                        label: const Text('Save Bill [F9]', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: AppColors.primary,
+                                          padding: const EdgeInsets.symmetric(vertical: 14),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      flex: 2,
+                                      child: ElevatedButton.icon(
+                                        onPressed: () => _triggerCheckout(posProvider, dashProvider, shouldPrint: true),
+                                        icon: const Icon(Icons.print, size: 18),
+                                        label: const Text('Save & Print [F12]', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: AppColors.success,
+                                          padding: const EdgeInsets.symmetric(vertical: 14),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                        ),
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ],
-                              const Divider(color: AppColors.border, height: 16),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: const [
-                                      Text('NET PAYABLE', style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-                                      Text('FINAL AMOUNT', style: TextStyle(color: AppColors.primaryLight, fontSize: 12, fontWeight: FontWeight.w900)),
-                                    ],
-                                  ),
-                                  Text(
-                                    '₹${posProvider.netAmount.toStringAsFixed(2)}',
-                                    style: const TextStyle(
-                                      color: AppColors.accent,
-                                      fontSize: 26,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
+                            ),
                           ),
                         ),
-                        const SizedBox(height: 16),
 
-                        // Action Checkout Buttons
-                        Row(
-                          children: [
-                            Expanded(
-                              flex: 1,
-                              child: OutlinedButton(
-                                onPressed: () {
-                                  posProvider.resetCart();
-                                  _custNameController.clear();
-                                  _custPhoneController.clear();
-                                  _discountController.text = '0';
+                        // Customer Search Autocomplete Overlay
+                        if (_showCustomerSuggestions && _filteredCustomers.isNotEmpty)
+                          Positioned(
+                            top: 130,
+                            left: 16,
+                            right: 16,
+                            child: Container(
+                              constraints: const BoxConstraints(maxHeight: 180),
+                              decoration: BoxDecoration(
+                                color: AppColors.surface,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: AppColors.border),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.25),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 5),
+                                  )
+                                ],
+                              ),
+                              child: ListView.separated(
+                                shrinkWrap: true,
+                                itemCount: _filteredCustomers.length,
+                                separatorBuilder: (_, _) => const Divider(color: AppColors.border, height: 1),
+                                itemBuilder: (context, index) {
+                                  final cust = _filteredCustomers[index];
+                                  return ListTile(
+                                    dense: true,
+                                    leading: const CircleAvatar(
+                                      radius: 14,
+                                      backgroundColor: Color(0xFFE6F4EA),
+                                      child: Icon(Icons.person, size: 14, color: AppColors.primary),
+                                    ),
+                                    title: Text(
+                                      cust.name,
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
+                                    ),
+                                    subtitle: Text(
+                                      cust.phone,
+                                      style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                                    ),
+                                    trailing: cust.pendingBalance > 0
+                                        ? Text(
+                                            'Udhar: ₹${cust.pendingBalance.toStringAsFixed(0)}',
+                                            style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 11),
+                                          )
+                                        : null,
+                                    onTap: () => _selectCustomer(cust),
+                                  );
                                 },
-                                style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: AppColors.border),
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                ),
-                                child: const Text('Clear', style: TextStyle(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.bold)),
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              flex: 2,
-                              child: ElevatedButton.icon(
-                                onPressed: () => _triggerCheckout(posProvider, dashProvider, shouldPrint: false),
-                                icon: const Icon(Icons.check_circle_outline, size: 18),
-                                label: const Text('Save Bill', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppColors.primary,
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              flex: 2,
-                              child: ElevatedButton.icon(
-                                onPressed: () => _triggerCheckout(posProvider, dashProvider, shouldPrint: true),
-                                icon: const Icon(Icons.print, size: 18),
-                                label: const Text('Save & Print', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppColors.success,
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                          ),
                       ],
                     ),
                   ),
-                ),
-
-                // Customer Search Autocomplete Overlay
-                if (_showCustomerSuggestions && _filteredCustomers.isNotEmpty)
-                  Positioned(
-                    top: 130,
-                    left: 16,
-                    right: 16,
-                    child: Container(
-                      constraints: const BoxConstraints(maxHeight: 180),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.border),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.25),
-                            blurRadius: 10,
-                            offset: const Offset(0, 5),
-                          )
-                        ],
-                      ),
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: _filteredCustomers.length,
-                        separatorBuilder: (_, _) => const Divider(color: AppColors.border, height: 1),
-                        itemBuilder: (context, index) {
-                          final cust = _filteredCustomers[index];
-                          return ListTile(
-                            dense: true,
-                            leading: const CircleAvatar(
-                              radius: 14,
-                              backgroundColor: Color(0xFFE6F4EA),
-                              child: Icon(Icons.person, size: 14, color: AppColors.primary),
-                            ),
-                            title: Text(
-                              cust.name,
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
-                            ),
-                            subtitle: Text(
-                              cust.phone,
-                              style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                            ),
-                            trailing: cust.pendingBalance > 0
-                                ? Text(
-                                    'Udhar: ₹${cust.pendingBalance.toStringAsFixed(0)}',
-                                    style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 11),
-                                  )
-                                : null,
-                            onTap: () => _selectCustomer(cust),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
       ),
     );
   }
+
+  Widget _buildKeyboardShortcutsHeader(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          )
+        ],
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.keyboard, size: 18, color: AppColors.primary),
+          const SizedBox(width: 8),
+          const Text('KEYBOARD:', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.primary, letterSpacing: 0.5)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: const [
+                  _ShortcutTag(keyLabel: 'F2', actionLabel: 'Search Med'),
+                  _ShortcutTag(keyLabel: 'F3', actionLabel: 'Customer Name'),
+                  _ShortcutTag(keyLabel: 'F4', actionLabel: 'Quick Sale'),
+                  _ShortcutTag(keyLabel: 'F9', actionLabel: 'Save Bill'),
+                  _ShortcutTag(keyLabel: 'F12 / Numpad Enter', actionLabel: 'Save & Print'),
+                  _ShortcutTag(keyLabel: 'Esc', actionLabel: 'Clear Cart'),
+                ],
+              ),
+            ),
+          ),
+          InkWell(
+            onTap: () => setState(() => _showVirtualNumpad = !_showVirtualNumpad),
+            borderRadius: BorderRadius.circular(6),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: _showVirtualNumpad ? AppColors.primary : AppColors.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.dialpad, size: 14, color: _showVirtualNumpad ? Colors.white : AppColors.primary),
+                  const SizedBox(width: 4),
+                  Text(
+                    _showVirtualNumpad ? 'Hide Numpad' : 'Numpad Buttons',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: _showVirtualNumpad ? Colors.white : AppColors.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVirtualNumpadDrawer(PosProvider posProvider, DashboardProvider dashProvider) {
+    final buttons = [
+      ['7', '8', '9', '⌫'],
+      ['4', '5', '6', 'CLEAR'],
+      ['1', '2', '3', '00'],
+      ['0', '.', '+', 'ENTER'],
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.4)),
+        boxShadow: const [
+          BoxShadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 4))
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.dialpad, size: 16, color: Colors.amber),
+                  SizedBox(width: 6),
+                  Text('Virtual Numeric Keypad (Touch / Click Numpad)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                ],
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white70, size: 16),
+                onPressed: () => setState(() => _showVirtualNumpad = false),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Column(
+            children: buttons.map((row) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: row.map((btn) {
+                    final isAction = btn == 'ENTER' || btn == 'CLEAR' || btn == '⌫';
+                    final isEnter = btn == 'ENTER';
+                    return Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 3),
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isEnter
+                                ? const Color(0xFF10B981)
+                                : isAction
+                                    ? const Color(0xFFEF4444)
+                                    : const Color(0xFF334155),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          ),
+                          onPressed: () {
+                            if (btn == '⌫') {
+                              _onNumpadPressed('BACK');
+                            } else {
+                              _onNumpadPressed(btn);
+                            }
+                          },
+                          child: Text(
+                            btn,
+                            style: TextStyle(
+                              fontSize: isAction && btn.length > 2 ? 11 : 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
 }
+
+class _ShortcutTag extends StatelessWidget {
+  final String keyLabel;
+  final String actionLabel;
+
+  const _ShortcutTag({required this.keyLabel, required this.actionLabel});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(
+              keyLabel,
+              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            actionLabel,
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+          ),
+        ],
+      ),
+    );
+  }
+}
+

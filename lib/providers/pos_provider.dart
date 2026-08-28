@@ -31,8 +31,9 @@ class PosProvider extends ChangeNotifier {
   bool get isSearching => _isSearching;
 
   double get totalAmount {
-    return _cartItems.fold(0.0, (sum, item) => sum + item.totalPrice);
+    return _cartItems.fold(0.0, (sum, item) => sum + item.grossAmount);
   }
+
 
   double get taxableAmount {
     return (totalAmount - _discount).clamp(0.0, 9999999.0);
@@ -86,17 +87,18 @@ class PosProvider extends ChangeNotifier {
 
   // Auto-complete medicine search from SQLite (Desktop-only)
   Future<void> searchMedicines(String query) async {
-    if (query.trim().isEmpty) {
-      _searchResults = [];
-      notifyListeners();
+    final clean = query.trim();
+    if (clean.isEmpty) {
+      if (_searchResults.isNotEmpty || _isSearching) {
+        _searchResults = [];
+        _isSearching = false;
+        notifyListeners();
+      }
       return;
     }
 
-    _isSearching = true;
-    notifyListeners();
-
     try {
-      _searchResults = await SqliteService.instance.searchMedicines(query);
+      _searchResults = await SqliteService.instance.searchMedicines(clean);
     } catch (e) {
       debugPrint('SQLite Search Error: $e');
       _searchResults = [];

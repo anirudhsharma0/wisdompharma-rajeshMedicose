@@ -6,6 +6,7 @@ import '../../../providers/dashboard_provider.dart';
 import '../../../data/models/customer_model.dart';
 import '../../../data/models/supplier_model.dart';
 import '../../../data/services/pdf_service.dart';
+import '../../common/widgets/loading_overlay.dart';
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 
@@ -87,7 +88,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                 children: [
                   const Text('Pending Khata Balance:', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
                   Text(
-                    '₹${customer.pendingBalance.toStringAsFixed(2)}',
+                    '₹${provider.getCustomerPendingBalance(customer).toStringAsFixed(2)}',
                     style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                 ],
@@ -186,7 +187,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                   children: [
                     const Text('Current Khata Balance:', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
                     Text(
-                      '₹${customer.pendingBalance.toStringAsFixed(2)}',
+                      '₹${provider.getCustomerPendingBalance(customer).toStringAsFixed(2)}',
                       style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 16),
                     ),
                   ],
@@ -604,34 +605,41 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                     // Close dialog immediately for instant UI feedback
                     Navigator.pop(ctx);
 
-                    final voucher = await provider.paySupplier(
-                      targetId,
-                      amt,
-                      paymentMode: selectedMode,
-                      referenceNumber: refNo,
-                      remarks: remarks,
-                    );
-
-                    if (shouldPrint && voucher != null) {
-                      final remBal = (supplier.due - amt).clamp(0.0, 9999999.0);
-                      final pdfBytes = await PdfService.generatePaymentReceiptPdf(
-                        voucherNumber: voucher.voucherNumber,
-                        partyName: supplier.name,
-                        partyPhone: supplier.contact,
-                        amountPaid: amt,
+                    AppLoadingOverlay.show(context, message: 'Processing Supplier Payment...');
+                    try {
+                      final voucher = await provider.paySupplier(
+                        targetId,
+                        amt,
                         paymentMode: selectedMode,
                         referenceNumber: refNo,
                         remarks: remarks,
-                        createdAt: DateTime.now(),
-                        remainingBalance: remBal,
-                        agencyName: supplier.name,
-                        agencyAddress: supplier.address ?? 'Wholesale Distributor',
                       );
 
-                      await Printing.layoutPdf(
-                        onLayout: (PdfPageFormat format) async => pdfBytes,
-                        name: 'Payment_Receipt_${supplier.name}_${voucher.voucherNumber}',
-                      );
+                      if (shouldPrint && voucher != null) {
+                        final remBal = (supplier.due - amt).clamp(0.0, 9999999.0);
+                        final pdfBytes = await PdfService.generatePaymentReceiptPdf(
+                          voucherNumber: voucher.voucherNumber,
+                          partyName: supplier.name,
+                          partyPhone: supplier.contact,
+                          amountPaid: amt,
+                          paymentMode: selectedMode,
+                          referenceNumber: refNo,
+                          remarks: remarks,
+                          createdAt: DateTime.now(),
+                          remainingBalance: remBal,
+                          agencyName: supplier.name,
+                          agencyAddress: supplier.address ?? 'Wholesale Distributor',
+                        );
+
+                        await Printing.layoutPdf(
+                          onLayout: (PdfPageFormat format) async => pdfBytes,
+                          name: 'Payment_Receipt_${supplier.name}_${voucher.voucherNumber}',
+                        );
+                      }
+                    } finally {
+                      if (context.mounted) {
+                        AppLoadingOverlay.hide(context);
+                      }
                     }
                   },
                   icon: const Icon(Icons.print, size: 16),
@@ -1075,23 +1083,41 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
         return Consumer<DashboardProvider>(
           builder: (context, provider, child) {
             final latestCust = provider.customers.firstWhere(
-              (c) => (customer.phone.isNotEmpty && c.phone == customer.phone) || c.name.toLowerCase() == customer.name.toLowerCase(),
+              (c) => (customer.phone.trim().isNotEmpty && c.phone.trim() == customer.phone.trim()) || c.name.trim().toLowerCase() == customer.name.trim().toLowerCase(),
               orElse: () => customer,
             );
 
-            final customerBills = provider.bills.where((b) =>
-              (latestCust.phone.isNotEmpty && b.customerPhone == latestCust.phone) ||
-              (b.customerName.trim().toLowerCase() == latestCust.name.trim().toLowerCase())
-            ).toList();
+            final targetName = latestCust.name.trim().toLowerCase();
+            final targetPhone = latestCust.phone.trim();
 
-            final customerPayments = provider.customerPayments.where((p) =>
-              p.customerId == latestCust.id ||
-              (latestCust.phone.isNotEmpty && p.customerPhone == latestCust.phone) ||
-              (p.customerName.trim().toLowerCase() == latestCust.name.trim().toLowerCase())
-            ).toList();
+            final customerBills = provider.bills.where((b) {
+              final bName = b.customerName.trim().toLowerCase();
+              final bPhone = b.customerPhone.trim();
+              return (targetPhone.isNotEmpty && bPhone == targetPhone) ||
+                     (bName.isNotEmpty && (bName == targetName || bName.replaceAll(RegExp(r'\s+'), ' ') == targetName.replaceAll(RegExp(r'\s+'), ' ')));
+            }).toList();
+
+            final customerPayments = provider.customerPayments.where((p) {
+              final pName = p.customerName.trim().toLowerCase();
+              final pPhone = p.customerPhone.trim();
+              return (latestCust.id != null && p.customerId == latestCust.id) ||
+                     (targetPhone.isNotEmpty && pPhone == targetPhone) ||
+                     (pName.isNotEmpty && (pName == targetName || pName.replaceAll(RegExp(r'\s+'), ' ') == targetName.replaceAll(RegExp(r'\s+'), ' ')));
+            }).toList();
+
+            final customerVouchers = provider.vouchers.where((v) {
+              final vName = v.partyName.trim().toLowerCase();
+              final vPhone = v.partyPhone.trim();
+              return v.type == 'SALE' &&
+                     ((targetPhone.isNotEmpty && vPhone == targetPhone) ||
+                      (vName.isNotEmpty && (vName == targetName || vName.replaceAll(RegExp(r'\s+'), ' ') == targetName.replaceAll(RegExp(r'\s+'), ' '))));
+            }).toList();
 
             List<Map<String, dynamic>> txs = [];
+            final Set<String> processedRefs = {};
+
             for (var bill in customerBills) {
+              processedRefs.add(bill.billNumber);
               txs.add({
                 'type': 'BILL',
                 'ref': bill.billNumber,
@@ -1100,6 +1126,22 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                 'details': bill.items.map((e) => e.quantity == 1 && e.medicineName != 'Manual Udhar / Credit Entry' ? e.medicineName : '${e.medicineName} (${e.quantity})').join(', '),
               });
             }
+
+            for (var v in customerVouchers) {
+              final refKey = v.referenceNumber.isNotEmpty ? v.referenceNumber : v.voucherNumber;
+              if (!processedRefs.contains(v.voucherNumber) && !processedRefs.contains(refKey)) {
+                processedRefs.add(v.voucherNumber);
+                processedRefs.add(refKey);
+                txs.add({
+                  'type': 'BILL',
+                  'ref': v.voucherNumber,
+                  'amount': v.amount,
+                  'date': v.createdAt,
+                  'details': v.remarks.isNotEmpty ? v.remarks : 'Manual Udhar / Credit Sale',
+                });
+              }
+            }
+
             for (var pay in customerPayments) {
               txs.add({
                 'type': 'PAYMENT',
@@ -1188,44 +1230,50 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           // Outstanding Summary Card
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                            decoration: BoxDecoration(
-                              gradient: latestCust.pendingBalance > 0
-                                  ? LinearGradient(colors: [Colors.red.shade900.withValues(alpha: 0.3), Colors.red.shade800.withValues(alpha: 0.1)])
-                                  : LinearGradient(colors: [Colors.green.shade900.withValues(alpha: 0.3), Colors.green.shade800.withValues(alpha: 0.1)]),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: latestCust.pendingBalance > 0 ? Colors.redAccent.withValues(alpha: 0.4) : AppColors.success.withValues(alpha: 0.4),
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                          Builder(
+                            builder: (context) {
+                              final currentBal = provider.getCustomerPendingBalance(latestCust);
+                              final isPending = currentBal > 0;
+                              return Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                decoration: BoxDecoration(
+                                  gradient: isPending
+                                      ? LinearGradient(colors: [Colors.red.shade900.withValues(alpha: 0.3), Colors.red.shade800.withValues(alpha: 0.1)])
+                                      : LinearGradient(colors: [Colors.green.shade900.withValues(alpha: 0.3), Colors.green.shade800.withValues(alpha: 0.1)]),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: isPending ? Colors.redAccent.withValues(alpha: 0.4) : AppColors.success.withValues(alpha: 0.4),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
-                                    const Text(
-                                      'CURRENT KHATA BALANCE',
-                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8, color: Colors.white70),
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'CURRENT KHATA BALANCE',
+                                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8, color: Colors.white70),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          isPending ? 'Payment Pending (Udhaar)' : 'Settled (No Balance Due)',
+                                          style: TextStyle(fontSize: 11, color: isPending ? Colors.red.shade200 : Colors.green.shade200),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(height: 4),
                                     Text(
-                                      latestCust.pendingBalance > 0 ? 'Payment Pending (Udhaar)' : 'Settled (No Balance Due)',
-                                      style: TextStyle(fontSize: 11, color: latestCust.pendingBalance > 0 ? Colors.red.shade200 : Colors.green.shade200),
+                                      '₹${currentBal.toStringAsFixed(2)}',
+                                      style: TextStyle(
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w900,
+                                        color: isPending ? Colors.redAccent : AppColors.success,
+                                      ),
                                     ),
                                   ],
                                 ),
-                                Text(
-                                  '₹${latestCust.pendingBalance.toStringAsFixed(2)}',
-                                  style: TextStyle(
-                                    fontSize: 22,
-                                    fontWeight: FontWeight.w900,
-                                    color: latestCust.pendingBalance > 0 ? Colors.redAccent : AppColors.success,
-                                  ),
-                                ),
-                              ],
-                            ),
+                              );
+                            },
                           ),
                           const SizedBox(height: 16),
                           Row(
@@ -1407,20 +1455,21 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
     // Calculate metrics
     final totalCount = isCustomers ? dashProvider.customers.length : dashProvider.suppliers.length;
     final dueCount = isCustomers
-        ? dashProvider.customers.where((c) => c.pendingBalance > 0).length
-        : dashProvider.suppliers.where((s) => s.due > 0).length;
+        ? dashProvider.customers.where((c) => dashProvider.getCustomerPendingBalance(c) > 0).length
+        : dashProvider.suppliers.where((s) => dashProvider.getSupplierPendingDue(s) > 0).length;
     final clearCount = totalCount - dueCount;
 
     final totalOutstanding = isCustomers
         ? dashProvider.totalOutstandingBalance
-        : dashProvider.suppliers.fold<double>(0, (sum, s) => sum + s.due);
+        : dashProvider.suppliers.fold<double>(0, (sum, s) => sum + dashProvider.getSupplierPendingDue(s));
 
     // Filter lists
     final filteredCustomers = dashProvider.customers.where((cust) {
       final query = _searchController.text.toLowerCase().trim();
       final matchesQuery = query.isEmpty || cust.name.toLowerCase().contains(query) || cust.phone.contains(query);
-      if (_filterTab == 'DUE') return matchesQuery && cust.pendingBalance > 0;
-      if (_filterTab == 'CLEAR') return matchesQuery && cust.pendingBalance == 0;
+      final custBal = dashProvider.getCustomerPendingBalance(cust);
+      if (_filterTab == 'DUE') return matchesQuery && custBal > 0;
+      if (_filterTab == 'CLEAR') return matchesQuery && custBal == 0;
       return matchesQuery;
     }).toList();
 
@@ -1687,7 +1736,8 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final customer = filteredCustomers[index];
-                  final hasBalance = customer.pendingBalance > 0;
+                  final custBal = dashProvider.getCustomerPendingBalance(customer);
+                  final hasBalance = custBal > 0;
 
                   return Container(
                     margin: const EdgeInsets.only(bottom: 10),
@@ -1745,7 +1795,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
                                 Text(
-                                  '₹${customer.pendingBalance.toStringAsFixed(2)}',
+                                  '₹${custBal.toStringAsFixed(2)}',
                                   style: TextStyle(
                                     color: hasBalance ? AppColors.error : AppColors.primaryDark,
                                     fontWeight: FontWeight.w900,

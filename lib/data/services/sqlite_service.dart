@@ -127,29 +127,38 @@ class SqliteService {
     return _cachedTableName!;
   }
 
+  String? _nameCol;
+  String? _compCol;
+  String? _manCol;
+  String? _mrpCol;
+
+  Future<void> _cacheColumns(Database db, String tableName) async {
+    if (_nameCol != null) return;
+    final columnsInfo = await db.rawQuery('PRAGMA table_info($tableName)');
+    final columns = columnsInfo.map((c) => c['name'] as String).toList();
+
+    _nameCol = columns.firstWhere((c) => ['medicine_name', 'name', 'medicine'].contains(c.toLowerCase()), orElse: () => 'medicine_name');
+    _compCol = columns.firstWhere((c) => ['composition', 'substitutes', 'salt'].contains(c.toLowerCase()), orElse: () => 'composition');
+    _manCol = columns.firstWhere((c) => ['manufacturer', 'category'].contains(c.toLowerCase()), orElse: () => 'manufacturer');
+    _mrpCol = columns.firstWhere((c) => ['mrp', 'price'].contains(c.toLowerCase()), orElse: () => 'mrp');
+  }
+
   // Auto-complete search (limits results to 15 for top speed)
   Future<List<MedicineMasterModel>> searchMedicines(String query) async {
     if (!PlatformUtils.isDesktop) return [];
-    if (query.trim().isEmpty) return [];
+    final cleanQuery = query.trim();
+    if (cleanQuery.isEmpty) return [];
 
     final db = await database;
     if (db == null) return [];
 
     final tableName = await _getTableName(db);
-
-    // Discover column names dynamically to avoid crash
-    final columnsInfo = await db.rawQuery('PRAGMA table_info($tableName)');
-    final columns = columnsInfo.map((c) => c['name'] as String).toList();
-
-    final nameCol = columns.firstWhere((c) => ['medicine_name', 'name', 'medicine'].contains(c.toLowerCase()), orElse: () => 'medicine_name');
-    final compCol = columns.firstWhere((c) => ['composition', 'substitutes', 'salt'].contains(c.toLowerCase()), orElse: () => 'composition');
-    final manCol = columns.firstWhere((c) => ['manufacturer', 'category'].contains(c.toLowerCase()), orElse: () => 'manufacturer');
-    final mrpCol = columns.firstWhere((c) => ['mrp', 'price'].contains(c.toLowerCase()), orElse: () => 'mrp');
+    await _cacheColumns(db, tableName);
 
     final List<Map<String, dynamic>> maps = await db.query(
       tableName,
-      where: '$nameCol LIKE ? OR $compCol LIKE ?',
-      whereArgs: ['%$query%', '%$query%'],
+      where: '$_nameCol LIKE ? OR $_compCol LIKE ?',
+      whereArgs: ['%$cleanQuery%', '%$cleanQuery%'],
       limit: 15,
     );
 
@@ -157,10 +166,10 @@ class SqliteService {
       final map = maps[i];
       return MedicineMasterModel(
         id: map['id'] ?? 0,
-        medicineName: map[nameCol]?.toString() ?? '',
-        composition: map[compCol]?.toString(),
-        manufacturer: map[manCol]?.toString(),
-        mrp: (map[mrpCol] as num?)?.toDouble() ?? 0.0,
+        medicineName: map[_nameCol]?.toString() ?? '',
+        composition: map[_compCol]?.toString(),
+        manufacturer: map[_manCol]?.toString(),
+        mrp: (map[_mrpCol] as num?)?.toDouble() ?? 0.0,
       );
     });
   }

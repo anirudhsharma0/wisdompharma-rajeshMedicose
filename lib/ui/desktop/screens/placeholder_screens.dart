@@ -1,16 +1,17 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../../core/constants/colors.dart';
 import '../../../providers/dashboard_provider.dart';
 import '../../../data/models/supplier_model.dart';
+import '../../../data/models/purchase_bill_model.dart';
 import '../../../data/models/inventory_model.dart';
 import '../../../data/models/medicine_master_model.dart';
 import '../../../data/services/sqlite_service.dart';
 import '../../../data/services/pdf_service.dart';
 import '../../../data/services/license_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import '../../common/widgets/custom_card.dart';
@@ -743,21 +744,10 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                       return;
                     }
 
-                    // 1. Seed Inventory Items & Auto-Save New Medicine Names to Master Database
+                    // 1. Auto-Save New Medicine Names to Master Database (for future search suggestions)
                     for (var itm in billItems) {
                       final medName = itm['medicineName'].toString().trim();
                       final mrpVal = (itm['mrp'] as num).toDouble();
-
-                      await provider.addInventory(InventoryModel(
-                        medicineName: medName,
-                        batchNumber: itm['batchNumber'],
-                        expiryDate: itm['expiryDate'],
-                        quantity: itm['qty'],
-                        purchasePrice: itm['purchasePrice'],
-                        mrp: mrpVal,
-                        salePrice: itm['salePrice'],
-                        supplierName: supName,
-                      ));
 
                       // Auto-save new medicine name to Master DB for future suggestions
                       try {
@@ -818,21 +808,21 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                       );
                     }
 
-                    // 3. Save local purchase bill log
-                    setState(() {
-                      _purchaseBills.insert(0, {
-                        'billNumber': billNo,
-                        'supplierName': supName,
-                        'date': billDateController.text,
-                        'itemsCount': billItems.length,
-                        'totalAmount': totalInvoiceAmount,
-                        'paidAmount': paidNow,
-                        'dueAmount': pendingDue,
-                        'paymentMode': paymentMode,
-                        'receiptNo': receiptNo,
-                        'items': billItems,
-                      });
-                    });
+                    // 3. Save purchase bill in Firebase
+                    await provider.addPurchaseBill(PurchaseBillModel(
+                      billNumber: billNo,
+                      supplierName: supName,
+                      supplierPhone: supplierPhone,
+                      billDate: DateTime.tryParse(billDateController.text.trim()) ?? DateTime.now(),
+                      itemsCount: billItems.length,
+                      totalAmount: totalInvoiceAmount,
+                      paidAmount: paidNow,
+                      dueAmount: pendingDue,
+                      paymentMode: paymentMode,
+                      receiptNo: receiptNo,
+                      items: billItems,
+                      createdAt: DateTime.now(),
+                    ));
 
                     // 4. Optionally Print Supplier Payment Receipt Slip
                     if (generateReceipt && paidNow > 0) {
@@ -865,7 +855,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                     );
                   },
                   icon: const Icon(Icons.check_circle),
-                  label: const Text('Save & Seed Stock Inventory'),
+                  label: const Text('Save Purchase Invoice'),
                 ),
               ],
             );
@@ -880,14 +870,16 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     final provider = Provider.of<DashboardProvider>(context);
     final suppliers = provider.suppliers;
 
-    final filteredBills = _purchaseBills.where((b) {
+    final purchaseBills = provider.purchaseBills;
+
+    final filteredBills = purchaseBills.where((b) {
       final q = _searchQuery.toLowerCase().trim();
       return q.isEmpty ||
-          b['billNumber'].toString().toLowerCase().contains(q) ||
-          b['supplierName'].toString().toLowerCase().contains(q);
+          b.billNumber.toLowerCase().contains(q) ||
+          b.supplierName.toLowerCase().contains(q);
     }).toList();
 
-    final totalPurchaseSum = _purchaseBills.fold(0.0, (sum, b) => sum + (b['totalAmount'] as double));
+    final totalPurchaseSum = purchaseBills.fold(0.0, (sum, b) => sum + b.totalAmount);
     final totalDueSum = suppliers.fold(0.0, (sum, s) => sum + s.due);
 
     return Padding(
@@ -940,7 +932,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                         children: [
                           const Text('Total Invoices Logged', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
                           const SizedBox(height: 4),
-                          Text('${_purchaseBills.length} Bills (₹${totalPurchaseSum.toStringAsFixed(0)})', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                          Text('${purchaseBills.length} Bills (₹${totalPurchaseSum.toStringAsFixed(0)})', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
                         ],
                       ),
                     ],
@@ -1032,7 +1024,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                                 const SizedBox(height: 12),
                                 const Text('No Purchase Bills Recorded Yet', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
                                 const SizedBox(height: 6),
-                                const Text('Click "Record New Purchase Bill" above to add distributor bills and seed stock inventory.', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                                const Text('Click "Record New Purchase Bill" above to add distributor bills.', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
                                 const SizedBox(height: 16),
                                 ElevatedButton.icon(
                                   style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
@@ -1060,27 +1052,28 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                                   DataColumn(label: Text('Receipt / Action', style: TextStyle(fontWeight: FontWeight.bold))),
                                 ],
                                 rows: filteredBills.map((bill) {
-                                  final due = bill['dueAmount'] as double;
-                                  final paid = bill['paidAmount'] as double;
+                                  final due = bill.dueAmount;
+                                  final paid = bill.paidAmount;
+                                  final bDateStr = DateFormat('yyyy-MM-dd').format(bill.billDate);
                                   return DataRow(
                                     cells: [
                                       DataCell(Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         mainAxisAlignment: MainAxisAlignment.center,
                                         children: [
-                                          Text(bill['billNumber'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                                          Text(bill['date'], style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                                          Text(bill.billNumber, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                          Text(bDateStr, style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
                                         ],
                                       )),
-                                      DataCell(Text(bill['supplierName'], style: const TextStyle(fontWeight: FontWeight.w600))),
-                                      DataCell(Text('${bill['itemsCount']} Batches')),
-                                      DataCell(Text('₹${(bill['totalAmount'] as double).toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold))),
+                                      DataCell(Text(bill.supplierName, style: const TextStyle(fontWeight: FontWeight.w600))),
+                                      DataCell(Text('${bill.itemsCount} Batches')),
+                                      DataCell(Text('₹${bill.totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold))),
                                       DataCell(Text('₹${paid.toStringAsFixed(2)}', style: TextStyle(color: paid > 0 ? AppColors.success : AppColors.textMuted, fontWeight: FontWeight.bold))),
                                       DataCell(Text('₹${due.toStringAsFixed(2)}', style: TextStyle(color: due > 0 ? AppColors.error : AppColors.textMuted, fontWeight: FontWeight.bold))),
                                       DataCell(Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                         decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6)),
-                                        child: Text(bill['paymentMode'], style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primary)),
+                                        child: Text(bill.paymentMode, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primary)),
                                       )),
                                       DataCell(
                                         ElevatedButton.icon(
@@ -1094,14 +1087,14 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                                           onPressed: () async {
                                             try {
                                               final pdfBytes = await PdfService.generatePaymentReceiptPdf(
-                                                voucherNumber: bill['receiptNo'] ?? 'RCP-${bill['billNumber']}',
-                                                partyName: bill['supplierName'],
-                                                partyPhone: '',
+                                                voucherNumber: bill.receiptNo.isNotEmpty ? bill.receiptNo : 'RCP-${bill.billNumber}',
+                                                partyName: bill.supplierName,
+                                                partyPhone: bill.supplierPhone,
                                                 amountPaid: paid,
-                                                paymentMode: bill['paymentMode'],
-                                                referenceNumber: bill['billNumber'],
+                                                paymentMode: bill.paymentMode,
+                                                referenceNumber: bill.billNumber,
                                                 remarks: paid > 0 ? 'Wholesale Stock Purchase Payment Slip' : 'Wholesale Purchase Credit Invoice Voucher',
-                                                createdAt: DateTime.now(),
+                                                createdAt: bill.createdAt,
                                                 remainingBalance: due,
                                               );
                                               await Printing.layoutPdf(onLayout: (_) async => pdfBytes);
@@ -2018,6 +2011,95 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
+
+                  // Clear Cache Section
+                  const Text('App Cache & Local Data', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.cleaning_services_rounded, color: Colors.orange, size: 22),
+                        ),
+                        const SizedBox(width: 14),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Clear Local Cache', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textPrimary)),
+                              SizedBox(height: 2),
+                              Text(
+                                'Phone ki temporary memory clear hogi. Firebase ka koi data delete nahi hoga.',
+                                style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        ElevatedButton.icon(
+                          onPressed: () async {
+                            final confirm = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                title: const Row(
+                                  children: [
+                                    Icon(Icons.cleaning_services_rounded, color: Colors.orange),
+                                    SizedBox(width: 8),
+                                    Text('Clear Cache?', style: TextStyle(fontSize: 16)),
+                                  ],
+                                ),
+                                content: const Text(
+                                  'Local temporary data clear hoga.\n\nFirebase pe stored Bills, Customers, Payments — sab safe rahenge.\n\nApp restart ke baad data wapas sync ho jayega.',
+                                  style: TextStyle(fontSize: 13),
+                                ),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                  ElevatedButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                                    child: const Text('Haan, Clear Karo'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirm == true) {
+                              final prefs = await SharedPreferences.getInstance();
+                              await prefs.remove('offline_customers_json');
+                              await prefs.remove('offline_payments_json');
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('✓ Local cache cleared! Data Firebase se wapas sync hoga.'),
+                                  backgroundColor: Colors.orange,
+                                  duration: Duration(seconds: 3),
+                                ),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.delete_sweep_rounded, size: 16),
+                          label: const Text('Clear Cache'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
                   const Text('Software & Agency Development Info', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
                   const SizedBox(height: 12),
                   Container(
@@ -2112,192 +2194,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ),
-                  const Divider(height: 32),
-                  const Text('Danger Zone (Full Data Reset)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.red)),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.red.shade50,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.red.shade200),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: const [
-                            Text('Wipe All Store Data & Records', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red, fontSize: 13)),
-                            SizedBox(height: 4),
-                            Text('Deletes all sales bills, inventory stock, customer khata balances, vouchers, and supplier records.', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
-                          ],
-                        ),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red.shade700,
-                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                          ),
-                          icon: const Icon(Icons.delete_forever, color: Colors.white, size: 18),
-                          label: const Text('Clean / Wipe All Data', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-                          onPressed: () => _confirmClearAllData(context, provider),
-                        ),
-                      ],
-                    ),
-                  ),
                 ],
               ),
             ),
           ),
         ],
       ),
-    );
-  }
-
-  void _confirmClearAllData(BuildContext context, DashboardProvider provider) {
-    showDialog(
-      context: context,
-      builder: (ctx) => WipeDataSecurityDialog(provider: provider),
-    );
-  }
-}
-
-// ================= SECURITY CONFIRMATION DIALOG FOR DATA RESET =================
-class WipeDataSecurityDialog extends StatefulWidget {
-  final DashboardProvider provider;
-  const WipeDataSecurityDialog({super.key, required this.provider});
-
-  @override
-  State<WipeDataSecurityDialog> createState() => _WipeDataSecurityDialogState();
-}
-
-class _WipeDataSecurityDialogState extends State<WipeDataSecurityDialog> {
-  late String _generatedPin;
-  final TextEditingController _pinController = TextEditingController();
-  bool _isMatch = false;
-
-  @override
-  void initState() {
-    super.initState();
-    final randomNum = Random().nextInt(900000) + 100000;
-    _generatedPin = randomNum.toString();
-  }
-
-  @override
-  void dispose() {
-    _pinController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _executeClearData() async {
-    if (!_isMatch) return;
-    Navigator.pop(context);
-    await widget.provider.clearAllData();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: Colors.red.shade700,
-          content: const Text('✓ All app store data wiped clean successfully.'),
-        ),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: Row(
-        children: const [
-          Icon(Icons.security, color: Colors.red, size: 28),
-          SizedBox(width: 10),
-          Text('SECURITY VERIFICATION - DATA WIPE', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red, fontSize: 15)),
-        ],
-      ),
-      content: SizedBox(
-        width: 440,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'To prevent accidental deletion, please enter the security PIN below using your Keyboard or Numpad keys.',
-              style: TextStyle(fontSize: 12.5, color: AppColors.textSecondary, height: 1.3),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.red.shade200),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Security Verification PIN:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.red)),
-                  SelectableText(
-                    _generatedPin,
-                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.red, letterSpacing: 3.0),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            RichText(
-              text: TextSpan(
-                style: const TextStyle(fontSize: 12, color: AppColors.textPrimary),
-                children: [
-                  const TextSpan(text: 'Type PIN '),
-                  TextSpan(text: _generatedPin, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.red, fontSize: 13)),
-                  const TextSpan(text: ' (Numpad / Keyboard) & press Enter:'),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _pinController,
-              autofocus: true,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 3.0, fontSize: 18),
-              decoration: InputDecoration(
-                hintText: 'Enter 6-digit PIN',
-                hintStyle: const TextStyle(letterSpacing: 1.0, fontSize: 14, fontWeight: FontWeight.normal),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(color: _isMatch ? AppColors.success : Colors.red, width: 2),
-                ),
-                suffixIcon: _isMatch
-                    ? const Icon(Icons.check_circle, color: AppColors.success, size: 24)
-                    : const Icon(Icons.lock_outline, color: Colors.grey),
-              ),
-              onChanged: (val) {
-                setState(() {
-                  _isMatch = val.trim() == _generatedPin;
-                });
-              },
-              onSubmitted: (_) => _executeClearData(),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel (Esc)', style: TextStyle(color: AppColors.textSecondary)),
-        ),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: _isMatch ? Colors.red.shade800 : Colors.grey.shade400,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          ),
-          icon: const Icon(Icons.cleaning_services, size: 18, color: Colors.white),
-          label: const Text('CONFIRM & WIPE ALL DATA', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 12)),
-          onPressed: _isMatch ? _executeClearData : null,
-        ),
-      ],
     );
   }
 }

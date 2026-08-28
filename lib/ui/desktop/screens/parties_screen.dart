@@ -10,15 +10,18 @@ import '../../../providers/dashboard_provider.dart';
 import '../../../data/models/supplier_model.dart';
 import '../../../data/models/customer_model.dart';
 import '../../../data/models/voucher_model.dart';
+import '../../../data/models/purchase_bill_model.dart';
 import '../../../data/models/bill_model.dart';
 import '../../../data/models/inventory_model.dart';
 import '../../../data/models/medicine_master_model.dart';
 import '../../../data/services/sqlite_service.dart';
 import '../../../data/services/pdf_service.dart';
+import '../../../data/services/bill_ocr_service.dart';
 import '../../../core/utils/platform_utils.dart';
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import '../../common/widgets/custom_card.dart';
+import '../../common/widgets/loading_overlay.dart';
 
 class PartyItem {
   final String id;
@@ -68,6 +71,20 @@ class PartiesScreen extends StatefulWidget {
   final String initialFilter; // 'ALL', 'SUPPLIERS', 'CUSTOMERS'
   const PartiesScreen({super.key, this.initialFilter = 'ALL'});
 
+  static void showAddPurchaseBillDialogWithPreFill({
+    required BuildContext context,
+    required PartyItem party,
+    required DashboardProvider provider,
+    ScannedBillModel? initialScannedBill,
+    VoidCallback? onBillSaved,
+  }) => _PartiesScreenState.showAddPurchaseBillDialogWithPreFill(
+    context: context,
+    party: party,
+    provider: provider,
+    initialScannedBill: initialScannedBill,
+    onBillSaved: onBillSaved,
+  );
+
   @override
   State<PartiesScreen> createState() => _PartiesScreenState();
 }
@@ -105,7 +122,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
         id: s.id ?? 'sup_${s.name}',
         name: s.name,
         phone: s.contact,
-        amount: s.due,
+        amount: provider.getSupplierPendingDue(s),
         partyType: 'Supplier',
         gstin: s.gstin,
         address: s.address,
@@ -118,7 +135,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
         id: c.id ?? 'cust_${c.name}',
         name: c.name,
         phone: c.phone,
-        amount: c.pendingBalance,
+        amount: provider.getCustomerPendingBalance(c),
         partyType: 'Customer',
       ));
     }
@@ -188,7 +205,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
       // Customer Transactions
       for (var b in provider.bills) {
         final bName = b.customerName.trim().toLowerCase();
-        final matchesName = bName.isNotEmpty && (bName == pName || bName.contains(pName) || pName.contains(bName));
+        final matchesName = bName.isNotEmpty && bName == pName;
         final matchesPhone = pPhone.isNotEmpty && b.customerPhone.trim() == pPhone;
         if (matchesName || matchesPhone) {
           list.add(PartyTransaction(
@@ -207,9 +224,10 @@ class _PartiesScreenState extends State<PartiesScreen> {
 
       for (var p in provider.customerPayments) {
         final cName = p.customerName.trim().toLowerCase();
-        final matchesName = cName.isNotEmpty && (cName == pName || cName.contains(pName) || pName.contains(cName));
+        final matchesName = cName.isNotEmpty && cName == pName;
         final matchesPhone = pPhone.isNotEmpty && p.customerPhone.trim() == pPhone;
-        if (matchesName || matchesPhone) {
+        final matchesId = party.id.isNotEmpty && p.customerId == party.id;
+        if (matchesName || matchesPhone || matchesId) {
           list.add(PartyTransaction(
             id: p.id ?? 'pay_${p.createdAt.millisecondsSinceEpoch}',
             type: 'Payment-In',
@@ -226,22 +244,10 @@ class _PartiesScreenState extends State<PartiesScreen> {
 
       for (var v in provider.vouchers) {
         final vName = v.partyName.trim().toLowerCase();
-        final matchesName = vName.isNotEmpty && (vName == pName || vName.contains(pName) || pName.contains(vName));
+        final matchesName = vName.isNotEmpty && vName == pName;
         final matchesPhone = pPhone.isNotEmpty && v.partyPhone.trim() == pPhone;
         if (matchesName || matchesPhone) {
-          if (v.type == 'RECEIPT') {
-            list.add(PartyTransaction(
-              id: v.id ?? 'vouch_${v.voucherNumber}',
-              type: 'Payment-In',
-              refNumber: v.voucherNumber,
-              date: v.createdAt,
-              totalAmount: v.amount,
-              balance: 0.0,
-              status: 'Received',
-              remarks: v.remarks,
-              rawObject: v,
-            ));
-          } else if (v.type == 'SALE') {
+          if (v.type == 'SALE') {
             list.add(PartyTransaction(
               id: v.id ?? 'vouch_s_${v.voucherNumber}',
               type: 'Sale',
@@ -739,766 +745,570 @@ class _PartiesScreenState extends State<PartiesScreen> {
     );
   }
 
-  void _showTransactionDetailsDialog(BuildContext context, PartyItem party, PartyTransaction t, DashboardProvider provider) {
-    VoucherModel? voucher;
-    BillModel? saleBill;
 
-    if (t.type == 'Purchase' || t.type == 'Payment-Out' || t.type == 'Payment-In') {
-      try {
-        voucher = provider.vouchers.firstWhere(
-          (v) => (v.id != null && v.id == t.id) || v.voucherNumber == t.refNumber || v.referenceNumber == t.refNumber,
-        );
-      } catch (_) {}
-    } else if (t.type == 'Sale') {
-      try {
-        saleBill = provider.bills.firstWhere(
-          (b) => (b.id != null && b.id == t.id) || b.billNumber == t.refNumber,
-        );
-      } catch (_) {}
-    }
 
-    final isOut = t.type == 'Purchase' || t.type == 'Payment-Out';
-    final paidAmount = (t.type == 'Payment-Out' || t.type == 'Payment-In')
-        ? t.totalAmount
-        : (t.status == 'Paid' || t.status == 'Cleared' ? t.totalAmount : 0.0);
-
-    showDialog(
+  void _showAddPurchaseBillDialog(BuildContext context, PartyItem party, DashboardProvider provider) {
+    showAddPurchaseBillDialogWithPreFill(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  t.type == 'Purchase'
-                      ? Icons.shopping_bag
-                      : (t.type == 'Sale' ? Icons.receipt_long : Icons.account_balance_wallet),
-                  color: isOut ? Colors.orange.shade800 : AppColors.success,
-                  size: 24,
-                ),
-                const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('${t.type} Details (${t.refNumber})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    Text('Party: ${party.name} (${party.partyType})', style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
-                  ],
-                ),
-              ],
-            ),
-            IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close, size: 20)),
-          ],
-        ),
-        content: SizedBox(
-          width: 650,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Top Financial Summary Card with 3 Breakdown Boxes
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: (isOut ? Colors.orange : AppColors.primary).withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: (isOut ? Colors.orange : AppColors.primary).withValues(alpha: 0.25)),
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Transaction Date & Time:', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                          Text(DateFormat('dd/MM/yyyy, hh:mm a').format(t.date), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                        ],
-                      ),
-                      const Divider(height: 16),
-                      
-                      // 3 Financial Boxes Grid: Total Amount | Paid Amount | Party Net Pending Due
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: Colors.blue.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
-                              ),
-                              child: Column(
-                                children: [
-                                  const Text('Total Bill Value', style: TextStyle(fontSize: 10, color: AppColors.textSecondary, fontWeight: FontWeight.bold)),
-                                  const SizedBox(height: 4),
-                                  Text('₹${t.totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.blue)),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: Colors.green.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
-                              ),
-                              child: Column(
-                                children: [
-                                  Text(t.type == 'Payment-Out' || t.type == 'Payment-In' ? 'Amount Paid' : 'Paid in Bill', style: const TextStyle(fontSize: 10, color: AppColors.textSecondary, fontWeight: FontWeight.bold)),
-                                  const SizedBox(height: 4),
-                                  Text('₹${paidAmount.toStringAsFixed(2)}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.green)),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: party.amount > 0 ? Colors.orange.withValues(alpha: 0.1) : Colors.grey.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: party.amount > 0 ? Colors.orange.withValues(alpha: 0.4) : Colors.grey.withValues(alpha: 0.3)),
-                              ),
-                              child: Column(
-                                children: [
-                                  Text(party.partyType == 'Supplier' ? 'Party Net Due' : 'Pending Collect', style: const TextStyle(fontSize: 10, color: AppColors.textSecondary, fontWeight: FontWeight.bold)),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '₹${party.amount.toStringAsFixed(2)}',
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.bold,
-                                      color: party.amount > 0 ? Colors.orange.shade800 : Colors.green,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Payment Mode / Status:', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: t.status == 'Cleared' || t.status == 'Paid' || t.status == 'Received'
-                                  ? Colors.green.withValues(alpha: 0.15)
-                                  : Colors.orange.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              voucher != null ? '${voucher.paymentMode} (${t.status})' : t.status,
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: t.status == 'Cleared' || t.status == 'Paid' || t.status == 'Received'
-                                    ? Colors.green.shade800
-                                    : Colors.orange.shade900,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Purchased Items List (if Sale Bill)
-                if (saleBill != null && saleBill.items.isNotEmpty) ...[
-                  const Text('Items Included in Bill:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primary)),
-                  const SizedBox(height: 8),
-                  Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey.shade300),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Column(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          color: Colors.grey.shade100,
-                          child: Row(
-                            children: const [
-                              Expanded(flex: 4, child: Text('Medicine Name', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                              Expanded(flex: 2, child: Text('Batch', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                              Expanded(flex: 1, child: Text('Qty', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                              Expanded(flex: 2, child: Text('Price', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                              Expanded(flex: 2, child: Text('Total', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-                            ],
-                          ),
-                        ),
-                        ...saleBill.items.map((item) => Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: const BoxDecoration(
-                            border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(flex: 4, child: Text(item.medicineName, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
-                              Expanded(flex: 2, child: Text(item.batchNumber, style: const TextStyle(fontSize: 11, color: AppColors.textMuted))),
-                              Expanded(flex: 1, child: Text('${item.quantity}', style: const TextStyle(fontSize: 12))),
-                              Expanded(flex: 2, child: Text('₹${item.salePrice.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12))),
-                              Expanded(flex: 2, child: Text('₹${item.totalPrice.toStringAsFixed(2)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
-                            ],
-                          ),
-                        )),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-
-                // Purchased Items List (if Purchase Entry)
-                if (t.type == 'Purchase') ...[
-                  const Text('Purchased Medicines & Bill Items:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.blue)),
-                  const SizedBox(height: 8),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.blue.shade200),
-                    ),
-                    child: Text(
-                      t.remarks != null && t.remarks!.isNotEmpty ? t.remarks! : 'Stock Purchase Bill #${t.refNumber}',
-                      style: const TextStyle(fontSize: 12, height: 1.4, color: AppColors.textPrimary, fontWeight: FontWeight.w500),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-
-                // Details & Remarks Box
-                const Text('Transaction Notes & Remarks:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                const SizedBox(height: 6),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.grey.shade300),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('• Reference No / Bill No: ${t.refNumber}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                      if (voucher != null && voucher.category.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Text('• Category: ${voucher.category}', style: const TextStyle(fontSize: 12)),
-                      ],
-                      const SizedBox(height: 4),
-                      Text('• Remarks: ${t.remarks != null && t.remarks!.isNotEmpty ? t.remarks : 'No additional remarks'}', style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          OutlinedButton.icon(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Printing transaction voucher for ${t.refNumber}...')),
-              );
-            },
-            icon: const Icon(Icons.print, size: 16),
-            label: const Text('Print Receipt'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
+      party: party,
+      provider: provider,
     );
   }
 
-  void _showAddPurchaseBillDialog(BuildContext context, PartyItem party, DashboardProvider provider) {
-    final invNoCtrl = TextEditingController(text: 'A${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}');
-    final invDateCtrl = TextEditingController(text: DateFormat('dd/MM/yyyy').format(DateTime.now()));
-    final paidAmtCtrl = TextEditingController(text: '0.0');
-    final rcptNoCtrl = TextEditingController();
-    String selectedMode = 'Cash';
-    bool printReceipt = false;
+  static void showAddPurchaseBillDialogWithPreFill({
+    required BuildContext context,
+    required PartyItem party,
+    required DashboardProvider provider,
+    ScannedBillModel? initialScannedBill,
+    VoidCallback? onBillSaved,
+  }) {
+    final invNoCtrl = TextEditingController(
+      text: (initialScannedBill != null && initialScannedBill.invoiceNumber.isNotEmpty)
+          ? initialScannedBill.invoiceNumber
+          : 'A${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+    );
+  final invDateCtrl = TextEditingController(
+    text: (initialScannedBill != null && initialScannedBill.invoiceDate.isNotEmpty)
+        ? initialScannedBill.invoiceDate
+        : DateFormat('dd/MM/yyyy').format(DateTime.now()),
+  );
+  final paidAmtCtrl = TextEditingController(text: '0.0');
+  final rcptNoCtrl = TextEditingController();
+  String selectedMode = 'Cash';
+  bool printReceipt = false;
+  bool isSavingBill = false;
 
-    // Empty initial row with all 11 fields
-    List<Map<String, TextEditingController>> itemRows = [
+  List<Map<String, TextEditingController>> itemRows = [];
+
+  if (initialScannedBill != null && initialScannedBill.items.isNotEmpty) {
+    for (var item in initialScannedBill.items) {
+      itemRows.add({
+        'name': TextEditingController(text: item.productName),
+        'qty': TextEditingController(text: '${item.quantity}${item.freeQty > 0 ? " + ${item.freeQty}" : ""}'),
+        'pack': TextEditingController(text: item.pack.isNotEmpty ? item.pack : '1S'),
+        'batch': TextEditingController(text: item.batchNumber),
+        'exp': TextEditingController(text: item.expiryDate),
+        'hsn': TextEditingController(text: item.hsn.isNotEmpty ? item.hsn : '3004'),
+        'omrp': TextEditingController(text: item.mrp > 0 ? item.mrp.toStringAsFixed(2) : ''),
+        'mrp': TextEditingController(text: item.mrp > 0 ? item.mrp.toStringAsFixed(2) : ''),
+        'rate': TextEditingController(text: item.purchaseRate > 0 ? item.purchaseRate.toStringAsFixed(2) : ''),
+        'sch': TextEditingController(text: item.schemeDiscount.toStringAsFixed(1)),
+        'dis': TextEditingController(text: item.discountPercent.toStringAsFixed(1)),
+        'gst': TextEditingController(text: item.gstPercent.toStringAsFixed(1)),
+      });
+    }
+  } else {
+    itemRows = [
       {
         'name': TextEditingController(),
         'qty': TextEditingController(text: '1'),
+        'pack': TextEditingController(text: '1S'),
         'batch': TextEditingController(),
         'exp': TextEditingController(),
+        'hsn': TextEditingController(text: '3004'),
         'omrp': TextEditingController(),
         'mrp': TextEditingController(),
         'rate': TextEditingController(),
+        'sch': TextEditingController(text: '0.0'),
         'dis': TextEditingController(text: '0.0'),
         'gst': TextEditingController(text: '5.0'),
       }
     ];
+  }
 
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          double totalBillAmount = 0.0;
-          for (var row in itemRows) {
-            final qStr = row['qty']!.text.split('+').first.trim();
-            final q = double.tryParse(qStr) ?? 0.0;
-            final r = double.tryParse(row['rate']!.text) ?? 0.0;
-            final dis = double.tryParse(row['dis']!.text) ?? 0.0;
-            final gst = double.tryParse(row['gst']!.text) ?? 0.0;
+  showDialog(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (context, setDialogState) {
+        double totalSubTotal = 0.0;
+        double totalDis = 0.0;
+        double totalTax = 0.0;
+        for (var row in itemRows) {
+          final qStr = row['qty']!.text.split('+').first.trim();
+          final q = double.tryParse(qStr) ?? 0.0;
+          final r = double.tryParse(row['rate']!.text) ?? 0.0;
+          final sch = double.tryParse(row['sch']?.text ?? '0.0') ?? 0.0;
+          final dis = double.tryParse(row['dis']!.text) ?? 0.0;
+          final gst = double.tryParse(row['gst']!.text) ?? 0.0;
 
-            final subtotal = q * r * (1.0 - (dis / 100.0));
-            final lineTotal = subtotal * (1.0 + (gst / 100.0));
-            totalBillAmount += lineTotal;
-          }
-          final paidAmt = double.tryParse(paidAmtCtrl.text) ?? 0.0;
-          final netBalanceAdded = (totalBillAmount - paidAmt).clamp(0.0, 9999999.0);
+          final lineAmount = q * r;
+          final afterScheme = lineAmount * (1.0 - (sch / 100.0));
+          final schDisAmt = lineAmount * (sch / 100.0);
+          final tradeDisAmt = afterScheme * (dis / 100.0);
+          final lineDis = schDisAmt + tradeDisAmt;
+          final netTaxable = lineAmount - lineDis;
+          final lineTax = netTaxable * (gst / 100.0);
 
-          return AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: Row(
-              children: [
-                const Icon(Icons.receipt_long, color: Colors.blue, size: 24),
-                const SizedBox(width: 10),
-                Text('Add Purchase Bill (${party.name})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              ],
-            ),
-            content: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
+          totalSubTotal += lineAmount;
+          totalDis += lineDis;
+          totalTax += lineTax;
+        }
+        final unroundedNet = totalSubTotal - totalDis + totalTax;
+        final totalBillAmount = unroundedNet.roundToDouble();
+        final paidAmt = double.tryParse(paidAmtCtrl.text) ?? 0.0;
+        final netBalanceAdded = (totalBillAmount - paidAmt).clamp(0.0, 9999999.0);
+
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              const Icon(Icons.receipt_long, color: Colors.blue, size: 24),
+              const SizedBox(width: 10),
+              Text('Add Purchase Bill (${party.name})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            ],
+          ),
+          content: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.vertical,
               child: SizedBox(
                 width: 1100,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: invNoCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Invoice / Bill No. *',
-                              hintText: 'e.g. A000937',
-                              prefixIcon: Icon(Icons.numbers, size: 18),
-                            ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: invNoCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Invoice / Bill No. *',
+                            hintText: 'e.g. A000937',
+                            prefixIcon: Icon(Icons.numbers, size: 18),
                           ),
                         ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: TextField(
-                            controller: invDateCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Invoice Date',
-                              hintText: 'e.g. 30/07/2026',
-                              prefixIcon: Icon(Icons.calendar_today, size: 18),
-                            ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: TextField(
+                          controller: invDateCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Invoice Date',
+                            hintText: 'e.g. 30/07/2026',
+                            prefixIcon: Icon(Icons.calendar_today, size: 18),
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
 
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('Purchased Medicines List:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primary)),
-                        TextButton.icon(
-                          onPressed: () {
-                            setDialogState(() {
-                              itemRows.add({
-                                'name': TextEditingController(),
-                                'qty': TextEditingController(text: '1'),
-                                'batch': TextEditingController(),
-                                'exp': TextEditingController(),
-                                'omrp': TextEditingController(),
-                                'mrp': TextEditingController(),
-                                'rate': TextEditingController(),
-                                'dis': TextEditingController(text: '0.0'),
-                                'gst': TextEditingController(text: '5.0'),
-                              });
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Purchased Medicines List:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.primary)),
+                      TextButton.icon(
+                        onPressed: () {
+                          setDialogState(() {
+                            itemRows.add({
+                              'name': TextEditingController(),
+                              'qty': TextEditingController(text: '1'),
+                              'batch': TextEditingController(),
+                              'exp': TextEditingController(),
+                              'omrp': TextEditingController(),
+                              'mrp': TextEditingController(),
+                              'rate': TextEditingController(),
+                              'sch': TextEditingController(text: '0.0'),
+                              'dis': TextEditingController(text: '0.0'),
+                              'gst': TextEditingController(text: '5.0'),
                             });
-                          },
-                          icon: const Icon(Icons.add, size: 16),
-                          label: const Text('+ Add Medicine Row'),
-                        ),
+                          });
+                        },
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('+ Add Medicine Row'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      children: const [
+                        SizedBox(width: 24, child: Text('Sr.', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        Expanded(flex: 7, child: Text('Medicine / Product Name & Packing', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        SizedBox(width: 4),
+                        Expanded(flex: 3, child: Text('Qty + Free', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        SizedBox(width: 4),
+                        Expanded(flex: 3, child: Text('Batch No.', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        SizedBox(width: 4),
+                        Expanded(flex: 3, child: Text('Expiry Date', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        SizedBox(width: 4),
+                        Expanded(flex: 3, child: Text('O.MRP', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        SizedBox(width: 4),
+                        Expanded(flex: 3, child: Text('MRP (₹)', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        SizedBox(width: 4),
+                        Expanded(flex: 3, child: Text('Rate (₹)', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        SizedBox(width: 4),
+                        Expanded(flex: 2, child: Text('Sch.', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        SizedBox(width: 4),
+                        Expanded(flex: 2, child: Text('Dis%', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        SizedBox(width: 4),
+                        Expanded(flex: 2, child: Text('GST%', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        SizedBox(width: 4),
+                        Expanded(flex: 3, child: Text('Total (₹)', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                        SizedBox(width: 32),
                       ],
                     ),
-                    const SizedBox(height: 6),
+                  ),
+                  const SizedBox(height: 6),
 
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Row(
-                        children: const [
-                          SizedBox(width: 24, child: Text('Sr.', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                          Expanded(flex: 7, child: Text('Medicine / Product Name & Packing', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                          SizedBox(width: 4),
-                          Expanded(flex: 3, child: Text('Qty + Free', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                          SizedBox(width: 4),
-                          Expanded(flex: 3, child: Text('Batch No.', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                          SizedBox(width: 4),
-                          Expanded(flex: 3, child: Text('Expiry Date', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                          SizedBox(width: 4),
-                          Expanded(flex: 3, child: Text('O.MRP', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                          SizedBox(width: 4),
-                          Expanded(flex: 3, child: Text('MRP (₹)', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                          SizedBox(width: 4),
-                          Expanded(flex: 3, child: Text('Rate (₹)', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                          SizedBox(width: 4),
-                          Expanded(flex: 2, child: Text('Dis%', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                          SizedBox(width: 4),
-                          Expanded(flex: 2, child: Text('GST%', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                          SizedBox(width: 4),
-                          Expanded(flex: 3, child: Text('Total (₹)', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
-                          SizedBox(width: 32),
-                        ],
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 280),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: List.generate(itemRows.length, (idx) {
+                          final row = itemRows[idx];
+
+                          final qStr = row['qty']!.text.split('+').first.trim();
+                          final qVal = double.tryParse(qStr) ?? 0.0;
+                          final rVal = double.tryParse(row['rate']!.text) ?? 0.0;
+                          final subtotal = qVal * rVal;
+                          final rowTotal = subtotal;
+
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 6.0),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                SizedBox(
+                                  width: 24,
+                                  child: Text('${idx + 1}.', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                ),
+                                Expanded(
+                                  flex: 7,
+                                  child: Autocomplete<MedicineMasterModel>(
+                                    optionsBuilder: (TextEditingValue textEditingValue) async {
+                                      final query = textEditingValue.text.trim();
+                                      if (query.isEmpty) return const Iterable<MedicineMasterModel>.empty();
+
+                                      List<MedicineMasterModel> results = [];
+                                      if (PlatformUtils.isDesktop) {
+                                        final dbRes = await SqliteService.instance.searchMedicines(query);
+                                        results.addAll(dbRes);
+                                      }
+                                      final invRes = provider.inventory.where((i) =>
+                                        i.medicineName.toLowerCase().contains(query.toLowerCase())
+                                      );
+                                      for (var i in invRes) {
+                                        if (!results.any((r) => r.medicineName.toLowerCase() == i.medicineName.toLowerCase())) {
+                                          results.add(MedicineMasterModel(
+                                            id: 0,
+                                            medicineName: i.medicineName,
+                                            composition: i.batchNumber,
+                                            manufacturer: '',
+                                            mrp: i.mrp,
+                                          ));
+                                        }
+                                      }
+                                      return results;
+                                    },
+                                    displayStringForOption: (MedicineMasterModel option) => option.medicineName,
+                                    fieldViewBuilder: (context, textEditingController, focusNode, onFieldSubmitted) {
+                                      if (row['name']!.text.isNotEmpty && textEditingController.text.isEmpty) {
+                                        textEditingController.text = row['name']!.text;
+                                      }
+                                      textEditingController.addListener(() {
+                                        row['name']!.text = textEditingController.text;
+                                      });
+                                      return TextField(
+                                        controller: textEditingController,
+                                        focusNode: focusNode,
+                                        decoration: const InputDecoration(
+                                          hintText: 'Search or type medicine name...',
+                                          isDense: true,
+                                          contentPadding: EdgeInsets.all(6),
+                                        ),
+                                      );
+                                    },
+                                    onSelected: (MedicineMasterModel selection) {
+                                      setDialogState(() {
+                                        row['name']!.text = selection.medicineName;
+                                        if (selection.mrp > 0) {
+                                          row['mrp']!.text = selection.mrp.toStringAsFixed(2);
+                                          row['omrp']!.text = selection.mrp.toStringAsFixed(2);
+                                        }
+                                      });
+                                    },
+                                    optionsViewBuilder: (context, onSelected, options) {
+                                      return Align(
+                                        alignment: Alignment.topLeft,
+                                        child: Material(
+                                          elevation: 4.0,
+                                          borderRadius: BorderRadius.circular(8),
+                                          child: Container(
+                                            width: 280,
+                                            constraints: const BoxConstraints(maxHeight: 180),
+                                            child: ListView.builder(
+                                              padding: EdgeInsets.zero,
+                                              shrinkWrap: true,
+                                              itemCount: options.length,
+                                              itemBuilder: (BuildContext context, int index) {
+                                                final option = options.elementAt(index);
+                                                return ListTile(
+                                                  dense: true,
+                                                  title: Text(option.medicineName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                                  subtitle: Text('MRP: ₹${option.mrp.toStringAsFixed(2)}${option.manufacturer != null && option.manufacturer!.isNotEmpty ? ' | ${option.manufacturer}' : ''}', style: const TextStyle(fontSize: 10)),
+                                                  onTap: () => onSelected(option),
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: row['qty'],
+                                    onChanged: (_) => setDialogState(() {}),
+                                    decoration: const InputDecoration(hintText: '1', isDense: true, contentPadding: EdgeInsets.all(6)),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: row['batch'],
+                                    decoration: const InputDecoration(hintText: 'Batch No.', isDense: true, contentPadding: EdgeInsets.all(6)),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: row['exp'],
+                                    decoration: const InputDecoration(hintText: 'MM/YY', isDense: true, contentPadding: EdgeInsets.all(6)),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: row['omrp'],
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    decoration: const InputDecoration(hintText: 'Old MRP', isDense: true, contentPadding: EdgeInsets.all(6)),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: row['mrp'],
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    decoration: const InputDecoration(hintText: 'MRP', isDense: true, contentPadding: EdgeInsets.all(6)),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: row['rate'],
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    onChanged: (_) => setDialogState(() {}),
+                                    decoration: const InputDecoration(hintText: 'Rate', isDense: true, contentPadding: EdgeInsets.all(6)),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 2,
+                                  child: TextField(
+                                    controller: row['sch'],
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    onChanged: (_) => setDialogState(() {}),
+                                    decoration: const InputDecoration(hintText: '0', isDense: true, contentPadding: EdgeInsets.all(6)),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 2,
+                                  child: TextField(
+                                    controller: row['dis'],
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    onChanged: (_) => setDialogState(() {}),
+                                    decoration: const InputDecoration(hintText: '0', isDense: true, contentPadding: EdgeInsets.all(6)),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 2,
+                                  child: TextField(
+                                    controller: row['gst'],
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    onChanged: (_) => setDialogState(() {}),
+                                    decoration: const InputDecoration(hintText: '5', isDense: true, contentPadding: EdgeInsets.all(6)),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  flex: 3,
+                                  child: Text(
+                                    '₹${rowTotal.toStringAsFixed(2)}',
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.blue),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 32,
+                                  child: IconButton(
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(),
+                                    icon: const Icon(Icons.delete_outline, color: Colors.red, size: 18),
+                                    onPressed: itemRows.length > 1
+                                        ? () => setDialogState(() => itemRows.removeAt(idx))
+                                        : null,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
                       ),
                     ),
-                    const SizedBox(height: 6),
+                  ),
+                  const SizedBox(height: 16),
 
-                    ...List.generate(itemRows.length, (idx) {
-                      final row = itemRows[idx];
-
-                      final qStr = row['qty']!.text.split('+').first.trim();
-                      final qVal = double.tryParse(qStr) ?? 0.0;
-                      final rVal = double.tryParse(row['rate']!.text) ?? 0.0;
-                      final disVal = double.tryParse(row['dis']!.text) ?? 0.0;
-                      final gstVal = double.tryParse(row['gst']!.text) ?? 0.0;
-                      final subtotal = qVal * rVal * (1.0 - (disVal / 100.0));
-                      final rowTotal = subtotal * (1.0 + (gstVal / 100.0));
-
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 6.0),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.blue.withValues(alpha: 0.25)),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            SizedBox(
-                              width: 24,
-                              child: Text('${idx + 1}.', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Total Invoice Amount (₹):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                Text('₹${totalBillAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.blue)),
+                              ],
                             ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                const Text('Net Balance Added to Due (₹):', style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
+                                Text(
+                                  '₹${netBalanceAdded.toStringAsFixed(2)}',
+                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.orange),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        const Divider(height: 20),
+                        Row(
+                          children: [
                             Expanded(
-                              flex: 7,
-                              child: Autocomplete<MedicineMasterModel>(
-                                optionsBuilder: (TextEditingValue textEditingValue) async {
-                                  final query = textEditingValue.text.trim();
-                                  if (query.isEmpty) return const Iterable<MedicineMasterModel>.empty();
-
-                                  List<MedicineMasterModel> results = [];
-                                  if (PlatformUtils.isDesktop) {
-                                    final dbRes = await SqliteService.instance.searchMedicines(query);
-                                    results.addAll(dbRes);
-                                  }
-                                  final invRes = provider.inventory.where((i) =>
-                                    i.medicineName.toLowerCase().contains(query.toLowerCase())
-                                  );
-                                  for (var i in invRes) {
-                                    if (!results.any((r) => r.medicineName.toLowerCase() == i.medicineName.toLowerCase())) {
-                                      results.add(MedicineMasterModel(
-                                        id: 0,
-                                        medicineName: i.medicineName,
-                                        composition: i.batchNumber,
-                                        manufacturer: '',
-                                        mrp: i.mrp,
-                                      ));
-                                    }
-                                  }
-                                  return results;
-                                },
-                                displayStringForOption: (MedicineMasterModel option) => option.medicineName,
-                                fieldViewBuilder: (context, textEditingController, focusNode, onFieldSubmitted) {
-                                  if (row['name']!.text.isNotEmpty && textEditingController.text.isEmpty) {
-                                    textEditingController.text = row['name']!.text;
-                                  }
-                                  textEditingController.addListener(() {
-                                    row['name']!.text = textEditingController.text;
-                                  });
-                                  return TextField(
-                                    controller: textEditingController,
-                                    focusNode: focusNode,
-                                    decoration: const InputDecoration(
-                                      hintText: 'Search or type medicine name...',
-                                      isDense: true,
-                                      contentPadding: EdgeInsets.all(6),
-                                    ),
-                                  );
-                                },
-                                onSelected: (MedicineMasterModel selection) {
-                                  setDialogState(() {
-                                    row['name']!.text = selection.medicineName;
-                                    if (selection.mrp > 0) {
-                                      row['mrp']!.text = selection.mrp.toStringAsFixed(2);
-                                      row['omrp']!.text = selection.mrp.toStringAsFixed(2);
-                                    }
-                                  });
-                                },
-                                optionsViewBuilder: (context, onSelected, options) {
-                                  return Align(
-                                    alignment: Alignment.topLeft,
-                                    child: Material(
-                                      elevation: 4.0,
-                                      borderRadius: BorderRadius.circular(8),
-                                      child: Container(
-                                        width: 280,
-                                        constraints: const BoxConstraints(maxHeight: 180),
-                                        child: ListView.builder(
-                                          padding: EdgeInsets.zero,
-                                          shrinkWrap: true,
-                                          itemCount: options.length,
-                                          itemBuilder: (BuildContext context, int index) {
-                                            final option = options.elementAt(index);
-                                            return ListTile(
-                                              dense: true,
-                                              title: Text(option.medicineName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                                              subtitle: Text('MRP: ₹${option.mrp.toStringAsFixed(2)}${option.manufacturer != null && option.manufacturer!.isNotEmpty ? ' | ${option.manufacturer}' : ''}', style: const TextStyle(fontSize: 10)),
-                                              onTap: () => onSelected(option),
-                                            );
-                                          },
-                                        ),
-                                      ),
-                                    ),
-                                  );
+                              flex: 3,
+                              child: TextField(
+                                controller: paidAmtCtrl,
+                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                onChanged: (_) => setDialogState(() {}),
+                                decoration: InputDecoration(
+                                  labelText: 'Paid Amount Now (₹)',
+                                  hintText: '0.0 (Enter cash paid if any)',
+                                  prefixIcon: const Icon(Icons.currency_rupee, size: 16),
+                                  isDense: true,
+                                  fillColor: Colors.white,
+                                  filled: true,
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              flex: 3,
+                              child: DropdownButtonFormField<String>(
+                                initialValue: selectedMode,
+                                decoration: InputDecoration(
+                                  labelText: 'Payment Mode',
+                                  prefixIcon: const Icon(Icons.account_balance_wallet, size: 16),
+                                  isDense: true,
+                                  fillColor: Colors.white,
+                                  filled: true,
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                items: const [
+                                  DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                                  DropdownMenuItem(value: 'UPI / Online', child: Text('UPI / Online')),
+                                  DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
+                                  DropdownMenuItem(value: 'Bank Transfer', child: Text('Bank Transfer')),
+                                ],
+                                onChanged: (val) {
+                                  if (val != null) setDialogState(() => selectedMode = val);
                                 },
                               ),
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: 12),
                             Expanded(
                               flex: 3,
                               child: TextField(
-                                controller: row['qty'],
-                                onChanged: (_) => setDialogState(() {}),
-                                decoration: const InputDecoration(hintText: '1', isDense: true, contentPadding: EdgeInsets.all(6)),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              flex: 3,
-                              child: TextField(
-                                controller: row['batch'],
-                                decoration: const InputDecoration(hintText: 'Batch No.', isDense: true, contentPadding: EdgeInsets.all(6)),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              flex: 3,
-                              child: TextField(
-                                controller: row['exp'],
-                                decoration: const InputDecoration(hintText: 'MM/YY', isDense: true, contentPadding: EdgeInsets.all(6)),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              flex: 3,
-                              child: TextField(
-                                controller: row['omrp'],
-                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                decoration: const InputDecoration(hintText: 'Old MRP', isDense: true, contentPadding: EdgeInsets.all(6)),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              flex: 3,
-                              child: TextField(
-                                controller: row['mrp'],
-                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                decoration: const InputDecoration(hintText: 'MRP', isDense: true, contentPadding: EdgeInsets.all(6)),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              flex: 3,
-                              child: TextField(
-                                controller: row['rate'],
-                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                onChanged: (_) => setDialogState(() {}),
-                                decoration: const InputDecoration(hintText: 'Rate', isDense: true, contentPadding: EdgeInsets.all(6)),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              flex: 2,
-                              child: TextField(
-                                controller: row['dis'],
-                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                onChanged: (_) => setDialogState(() {}),
-                                decoration: const InputDecoration(hintText: '0', isDense: true, contentPadding: EdgeInsets.all(6)),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              flex: 2,
-                              child: TextField(
-                                controller: row['gst'],
-                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                onChanged: (_) => setDialogState(() {}),
-                                decoration: const InputDecoration(hintText: '5', isDense: true, contentPadding: EdgeInsets.all(6)),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              flex: 3,
-                              child: Text(
-                                '₹${rowTotal.toStringAsFixed(2)}',
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.blue),
-                              ),
-                            ),
-                            SizedBox(
-                              width: 32,
-                              child: IconButton(
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                icon: const Icon(Icons.delete_outline, color: Colors.red, size: 18),
-                                onPressed: itemRows.length > 1
-                                    ? () => setDialogState(() => itemRows.removeAt(idx))
-                                    : null,
+                                controller: rcptNoCtrl,
+                                decoration: InputDecoration(
+                                  labelText: 'Receipt Slip No.',
+                                  hintText: 'e.g. 27822',
+                                  prefixIcon: const Icon(Icons.receipt, size: 16),
+                                  isDense: true,
+                                  fillColor: Colors.white,
+                                  filled: true,
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
                               ),
                             ),
                           ],
                         ),
-                      );
-                    }),
-                    const SizedBox(height: 16),
-
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withValues(alpha: 0.05),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.blue.withValues(alpha: 0.25)),
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text('Total Invoice Amount (₹):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                  Text('₹${totalBillAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.blue)),
-                                ],
-                              ),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  const Text('Net Balance Added to Due (₹):', style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
-                                  Text(
-                                    '₹${netBalanceAdded.toStringAsFixed(2)}',
-                                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.orange),
-                                  ),
-                                ],
-                              ),
-                            ],
+                        if (paidAmt > 0) ...[
+                          const SizedBox(height: 6),
+                          CheckboxListTile(
+                            value: printReceipt,
+                            contentPadding: EdgeInsets.zero,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            dense: true,
+                            title: const Text('Generate & Print Receipt Slip (Pink Slip)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.blue)),
+                            onChanged: (val) => setDialogState(() => printReceipt = val ?? false),
                           ),
-                          const Divider(height: 20),
-                          Row(
-                            children: [
-                              Expanded(
-                                flex: 3,
-                                child: TextField(
-                                  controller: paidAmtCtrl,
-                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                  onChanged: (_) => setDialogState(() {}),
-                                  decoration: InputDecoration(
-                                    labelText: 'Paid Amount Now (₹)',
-                                    hintText: '0.0 (Enter cash paid if any)',
-                                    prefixIcon: const Icon(Icons.currency_rupee, size: 16),
-                                    isDense: true,
-                                    fillColor: Colors.white,
-                                    filled: true,
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                flex: 3,
-                                child: DropdownButtonFormField<String>(
-                                  initialValue: selectedMode,
-                                  decoration: InputDecoration(
-                                    labelText: 'Payment Mode',
-                                    prefixIcon: const Icon(Icons.account_balance_wallet, size: 16),
-                                    isDense: true,
-                                    fillColor: Colors.white,
-                                    filled: true,
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                                  ),
-                                  items: const [
-                                    DropdownMenuItem(value: 'Cash', child: Text('Cash')),
-                                    DropdownMenuItem(value: 'UPI / Online', child: Text('UPI / Online')),
-                                    DropdownMenuItem(value: 'Cheque', child: Text('Cheque')),
-                                    DropdownMenuItem(value: 'Bank Transfer', child: Text('Bank Transfer')),
-                                  ],
-                                  onChanged: (val) {
-                                    if (val != null) setDialogState(() => selectedMode = val);
-                                  },
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                flex: 3,
-                                child: TextField(
-                                  controller: rcptNoCtrl,
-                                  decoration: InputDecoration(
-                                    labelText: 'Receipt Slip No.',
-                                    hintText: 'e.g. 27822',
-                                    prefixIcon: const Icon(Icons.receipt, size: 16),
-                                    isDense: true,
-                                    fillColor: Colors.white,
-                                    filled: true,
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (paidAmt > 0) ...[
-                            const SizedBox(height: 6),
-                            CheckboxListTile(
-                              value: printReceipt,
-                              contentPadding: EdgeInsets.zero,
-                              controlAffinity: ListTileControlAffinity.leading,
-                              dense: true,
-                              title: const Text('Generate & Print Receipt Slip (Pink Slip)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.blue)),
-                              onChanged: (val) => setDialogState(() => printReceipt = val ?? false),
-                            ),
-                          ],
                         ],
-                      ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-          actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-              ElevatedButton.icon(
-                icon: const Icon(Icons.check_circle_outline, size: 18),
-                label: const Text('Save Purchase Bill & Add Stock'),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700),
-                onPressed: () async {
-                  final invNo = invNoCtrl.text.trim();
-                  if (invNo.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Please enter Invoice Number')),
-                    );
-                    return;
-                  }
+          ),
+        ),
+        actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton.icon(
+              icon: isSavingBill
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Icon(Icons.check_circle_outline, size: 18),
+              label: Text(isSavingBill ? 'Saving Bill...' : 'Save Purchase Bill & Add Stock'),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700),
+              onPressed: isSavingBill ? null : () async {
+                final invNo = invNoCtrl.text.trim();
+                if (invNo.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Please enter Invoice Number')),
+                  );
+                  return;
+                }
 
+                setDialogState(() {
+                  isSavingBill = true;
+                });
+                AppLoadingOverlay.show(context, message: 'Saving Purchase Bill & Updating Stock...');
+
+                try {
                   int addedCount = 0;
                   List<String> itemSummaryLines = [];
                   for (var row in itemRows) {
@@ -1512,21 +1322,15 @@ class _PartiesScreenState extends State<PartiesScreen> {
                     final r = double.tryParse(row['rate']!.text) ?? 0.0;
                     final m = double.tryParse(row['mrp']!.text) ?? (r > 0 ? r * 1.2 : 100.0);
 
-                    // 1. Add to active store Inventory stock with Supplier Name linked
-                    await provider.addInventory(InventoryModel(
-                      medicineName: medName,
-                      batchNumber: bNo,
-                      expiryDate: exp,
-                      quantity: q,
-                      mrp: m,
-                      salePrice: m,
-                      purchasePrice: r,
-                      supplierName: party.name,
-                    ));
+                    final sch = double.tryParse(row['sch']?.text ?? '0.0') ?? 0.0;
+                    final dis = double.tryParse(row['dis']!.text) ?? 0.0;
+                    final gst = double.tryParse(row['gst']!.text) ?? 0.0;
+                    final pack = row['pack']?.text.trim() ?? '1S';
+                    final hsn = row['hsn']?.text.trim() ?? '3004';
 
-                    itemSummaryLines.add('$medName (Qty: $q, Batch: $bNo, Exp: $exp, Rate: ₹${r.toStringAsFixed(2)}, MRP: ₹${m.toStringAsFixed(2)})');
+                    itemSummaryLines.add('$medName (Qty: $q, Batch: $bNo, Exp: $exp, Rate: ₹${r.toStringAsFixed(2)}, Sch: ₹${sch.toStringAsFixed(2)}, MRP: ₹${m.toStringAsFixed(2)}, Dis: ${dis.toStringAsFixed(1)}%, GST: ${gst.toStringAsFixed(1)}%, Pack: $pack, HSN: $hsn)');
 
-                    // 2. Auto-Save New Medicine to Master Database (SQLite) if not present
+                    // Auto-Save New Medicine to Master Database (SQLite) if not present
                     if (PlatformUtils.isDesktop) {
                       final existing = await SqliteService.instance.searchMedicines(medName);
                       final exactMatch = existing.any((item) => item.medicineName.trim().toLowerCase() == medName.toLowerCase());
@@ -1544,9 +1348,44 @@ class _PartiesScreenState extends State<PartiesScreen> {
                     addedCount++;
                   }
 
-                  final detailedRemarks = 'Purchase Invoice #$invNo ($addedCount items):\n• ${itemSummaryLines.join('\n• ')}';
+                  final detailedRemarks = 'Purchase Invoice #$invNo (Agency: ${party.name}, $addedCount items):\n• ${itemSummaryLines.join('\n• ')}';
 
                   final mode = paidAmt > 0 ? (paidAmt >= totalBillAmount ? 'Cash' : 'Part Payment') : 'Credit';
+
+                  final List<Map<String, dynamic>> purchaseItems = itemRows.map((r) {
+                    final mName = r['name']!.text.trim();
+                    final bNo = r['batch']!.text.trim().isNotEmpty ? r['batch']!.text.trim() : 'N/A';
+                    final exp = r['exp']!.text.trim().isNotEmpty ? r['exp']!.text.trim() : 'N/A';
+                    final qStr = r['qty']!.text.split('+').first.trim();
+                    final qty = int.tryParse(qStr) ?? 1;
+                    final rate = double.tryParse(r['rate']!.text) ?? 0.0;
+                    final mrp = double.tryParse(r['mrp']!.text) ?? (rate > 0 ? rate * 1.2 : 0.0);
+                    return {
+                      'medicineName': mName,
+                      'batchNumber': bNo,
+                      'expiryDate': exp,
+                      'qty': qty,
+                      'purchasePrice': rate,
+                      'mrp': mrp,
+                      'salePrice': mrp,
+                    };
+                  }).where((i) => (i['medicineName'] as String).isNotEmpty).toList();
+
+                  final pendingDue = (totalBillAmount - paidAmt).clamp(0.0, 9999999.0);
+                  await provider.addPurchaseBill(PurchaseBillModel(
+                    billNumber: invNo,
+                    supplierName: party.name,
+                    supplierPhone: party.phone,
+                    billDate: DateTime.tryParse(invDateCtrl.text.trim()) ?? DateTime.now(),
+                    itemsCount: purchaseItems.length,
+                    totalAmount: totalBillAmount,
+                    paidAmount: paidAmt,
+                    dueAmount: pendingDue,
+                    paymentMode: selectedMode,
+                    receiptNo: rcptNoCtrl.text.trim().isNotEmpty ? rcptNoCtrl.text.trim() : invNo,
+                    items: purchaseItems,
+                    createdAt: DateTime.now(),
+                  ));
 
                   if (party.partyType == 'Supplier') {
                     await provider.addSupplierPurchase(
@@ -1585,6 +1424,10 @@ class _PartiesScreenState extends State<PartiesScreen> {
                     );
                   }
 
+                  if (onBillSaved != null) {
+                    onBillSaved();
+                  }
+
                   if (!context.mounted) return;
                   Navigator.pop(ctx);
 
@@ -1616,11 +1459,1024 @@ class _PartiesScreenState extends State<PartiesScreen> {
                       name: 'Payment_Receipt_${party.name}_${paymentVoucher.voucherNumber}',
                     );
                   }
-                },
+                } catch (e) {
+                  debugPrint('Error saving purchase bill: $e');
+                  setDialogState(() {
+                    isSavingBill = false;
+                  });
+                } finally {
+                  if (context.mounted) {
+                    AppLoadingOverlay.hide(context);
+                  }
+                }
+              },
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
+  static String _numberToIndianWords(double amount) {
+    int n = amount.round();
+    if (n <= 0) return "Zero";
+
+    final units = [
+      "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+      "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"
+    ];
+    final tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+
+    String convertLessThanThousand(int num) {
+      String current = "";
+      if (num % 100 < 20) {
+        current = units[num % 100];
+        num = num ~/ 100;
+      } else {
+        current = units[num % 10];
+        num = num ~/ 10;
+        current = tens[num % 10] + (current.isNotEmpty ? " $current" : "");
+        num = num ~/ 10;
+      }
+      if (num == 0) return current;
+      return "${units[num]} Hundred${current.isNotEmpty ? ' and $current' : ''}";
+    }
+
+    String result = "";
+    if (n ~/ 10000000 > 0) {
+      result += "${convertLessThanThousand(n ~/ 10000000)} Crore ";
+      n %= 10000000;
+    }
+    if (n ~/ 100000 > 0) {
+      result += "${convertLessThanThousand(n ~/ 100000)} Lakh ";
+      n %= 100000;
+    }
+    if (n ~/ 1000 > 0) {
+      result += "${convertLessThanThousand(n ~/ 1000)} Thousand ";
+      n %= 1000;
+    }
+    if (n > 0) {
+      result += convertLessThanThousand(n);
+    }
+    return result.trim();
+  }
+
+  void _showPaymentReceiptSlipDialog(
+    BuildContext context,
+    PartyItem party,
+    PartyTransaction transaction,
+  ) {
+    final amountInWords = _numberToIndianWords(transaction.totalAmount);
+
+    String agencyName = party.name;
+    final agencyMatch = RegExp(r'Agency:\s*([^,\n\(\)]+)', caseSensitive: false).firstMatch(transaction.remarks ?? '');
+    if (agencyMatch != null && agencyMatch.group(1) != null && agencyMatch.group(1)!.trim().isNotEmpty) {
+      agencyName = agencyMatch.group(1)!.trim();
+    }
+
+    String billRef = '-';
+    final billMatch = RegExp(r'(?:Bill|Invoice)\s*#?\s*([A-Za-z0-9]+)', caseSensitive: false).firstMatch(transaction.remarks ?? '');
+    if (billMatch != null && billMatch.group(1) != null) {
+      billRef = billMatch.group(1)!;
+    }
+
+    final dateStr = DateFormat('dd/MM/yyyy').format(transaction.date);
+
+    final isPaymentOut = transaction.type == 'Payment-Out' || transaction.type.toUpperCase().contains('OUT');
+
+    final headerTitle = isPaymentOut ? agencyName.toUpperCase() : 'M/s RAJESH MEDICOSE';
+    final headerAddress = isPaymentOut
+        ? ((party.address != null && party.address!.trim().isNotEmpty) ? party.address! : 'Wholesale Pharma Distributor')
+        : 'CHARWALA, CHARWALA (SIRSA)';
+    final headerContact = isPaymentOut
+        ? (party.phone.trim().isNotEmpty ? 'Mob. ${party.phone}' : '')
+        : 'Mob. 9050524678';
+
+    final receivedFromText = isPaymentOut ? 'M/s RAJESH MEDICOSE' : 'M/s ${party.name}';
+    final signatoryText = isPaymentOut ? agencyName.toUpperCase() : 'RAJESH MEDICOSE';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Container(
+          width: 580,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF0F5), // Traditional Pink Slip Tint
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.pink.shade700, width: 2),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          headerTitle,
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.pink.shade900,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          headerAddress,
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.black87),
+                        ),
+                        if (headerContact.isNotEmpty)
+                          Text(
+                            headerContact,
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.black87),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.pink.shade700,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          transaction.type.toUpperCase(),
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text('No. ${transaction.refNumber}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      Text('Dated: $dateStr', style: const TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 16),
+              const Divider(thickness: 1.5, color: Colors.black54),
+              const SizedBox(height: 12),
+
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 170,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.black, width: 1.5),
+                      color: Colors.white,
+                    ),
+                    child: Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          color: Colors.pink.shade100,
+                          child: const Row(
+                            children: [
+                              Expanded(flex: 3, child: Text('Bill No.', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
+                              Expanded(flex: 2, child: Text('Rs. P.', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
+                            ],
+                          ),
+                        ),
+                        const Divider(height: 1, color: Colors.black),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                          child: Row(
+                            children: [
+                              Expanded(flex: 3, child: Text(billRef, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600))),
+                              Expanded(flex: 2, child: Text(transaction.totalAmount.toStringAsFixed(0), textAlign: TextAlign.right, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                            ],
+                          ),
+                        ),
+                        const Divider(height: 1, color: Colors.black),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                          child: Row(
+                            children: [
+                              Expanded(flex: 3, child: Text('L. Disc.', style: TextStyle(fontSize: 10, color: Colors.black54))),
+                              Expanded(flex: 2, child: Text('-', textAlign: TextAlign.right, style: TextStyle(fontSize: 10))),
+                            ],
+                          ),
+                        ),
+                        const Divider(height: 1, color: Colors.black),
+                        Container(
+                          color: Colors.pink.shade50,
+                          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                          child: Row(
+                            children: [
+                              const Expanded(flex: 3, child: Text('G. Total', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                              Expanded(flex: 2, child: Text('₹${transaction.totalAmount.toStringAsFixed(0)}', textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.pink.shade900))),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(width: 16),
+
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        RichText(
+                          text: TextSpan(
+                            style: const TextStyle(fontSize: 13, color: Colors.black, height: 1.6),
+                            children: [
+                              const TextSpan(text: 'Received with thanks from '),
+                              TextSpan(text: '$receivedFromText\n', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              const TextSpan(text: 'a sum of Rupees '),
+                              TextSpan(text: '$amountInWords\n', style: const TextStyle(fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
+                              TextSpan(text: 'on account of bill ${billRef != "-" ? "#$billRef" : ""} by Cash / Online Transfer.'),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text('For : $signatoryText', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              const SizedBox(height: 24),
+                              const Text('Signature', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, fontStyle: FontStyle.italic)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 20),
+              const Divider(height: 1, color: Colors.black38),
+              const SizedBox(height: 12),
+
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton.icon(
+                    onPressed: () => Navigator.pop(ctx),
+                    icon: const Icon(Icons.close, size: 18),
+                    label: const Text('Close'),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      final pdfBytes = await PdfService.generatePaymentReceiptPdf(
+                        voucherNumber: transaction.refNumber,
+                        partyName: party.name,
+                        partyPhone: party.phone,
+                        amountPaid: transaction.totalAmount,
+                        paymentMode: 'Cash / Online',
+                        referenceNumber: billRef != '-' ? billRef : transaction.refNumber,
+                        remarks: transaction.remarks ?? '',
+                        createdAt: transaction.date,
+                        remainingBalance: 0.0,
+                        agencyName: agencyName,
+                      );
+                      await Printing.layoutPdf(
+                        onLayout: (PdfPageFormat format) async => pdfBytes,
+                        name: 'PaymentReceipt_${transaction.refNumber}',
+                      );
+                    },
+                    icon: const Icon(Icons.print, size: 18),
+                    label: const Text('Print Receipt Slip'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.pink.shade700,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ],
               ),
             ],
-          );
-        },
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showTransactionDetailsDialog(
+    BuildContext context,
+    PartyItem party,
+    PartyTransaction transaction,
+    DashboardProvider provider,
+  ) {
+    if (transaction.type == 'Payment-Out' || transaction.type == 'Payment-In' || transaction.type.toUpperCase().contains('PAYMENT')) {
+      _showPaymentReceiptSlipDialog(context, party, transaction);
+      return;
+    }
+
+    double currBill = transaction.totalAmount;
+    double cashReceived = 0.0;
+
+    double prevBal = (party.amount - (transaction.type == 'Purchase' || transaction.type == 'Sale' ? currBill : -cashReceived)).clamp(0.0, 9999999.0);
+    double totalOs = prevBal + currBill - cashReceived;
+
+    List<Map<String, dynamic>> items = [];
+    double subTotal = currBill;
+    double totalDis = 0.0;
+    double gst5Taxable = 0.0, gst5Tax = 0.0;
+    double gst12Taxable = 0.0, gst12Tax = 0.0;
+    double gst18Taxable = 0.0, gst18Tax = 0.0;
+    double totalTaxable = 0.0, totalTax = 0.0;
+    double roundOff = 0.0;
+    int totalItems = 0;
+    int totalQty = 0;
+
+    final raw = transaction.rawObject;
+    BillModel? bill;
+    if (raw is BillModel) {
+      bill = raw;
+    } else {
+      try {
+        bill = provider.bills.firstWhere(
+          (b) => b.billNumber == transaction.refNumber || (b.id != null && b.id == transaction.id),
+        );
+      } catch (_) {}
+    }
+
+    if (bill != null) {
+      subTotal = bill.totalAmount;
+      totalDis = bill.discount;
+      totalTax = bill.gstAmount;
+      currBill = bill.netAmount;
+      totalTaxable = (subTotal - totalDis).clamp(0.0, 9999999.0);
+      
+      if (bill.gstPercentage == 5.0 || bill.gstPercentage == 0.0) {
+        gst5Taxable = totalTaxable;
+        gst5Tax = totalTax;
+      } else if (bill.gstPercentage == 12.0) {
+        gst12Taxable = totalTaxable;
+        gst12Tax = totalTax;
+      } else if (bill.gstPercentage == 18.0) {
+        gst18Taxable = totalTaxable;
+        gst18Tax = totalTax;
+      }
+
+      totalItems = bill.items.length;
+      for (var item in bill.items) {
+        totalQty += item.quantity;
+        items.add({
+          'name': item.medicineName,
+          'batch': item.batchNumber,
+          'exp': item.expiryDate,
+          'qty': item.quantity,
+          'free': item.freeQty,
+          'pack': item.pack.isNotEmpty ? item.pack : '1S',
+          'hsn': item.hsn.isNotEmpty ? item.hsn : '3004',
+          'mrp': item.mrp,
+          'rate': item.salePrice,
+          'sch': item.schemeDiscPercent,
+          'dis': item.tradeDiscPercent,
+          'gst': item.gstPercent,
+          'amount': item.grossAmount,
+        });
+      }
+
+    } else {
+      String remarksToParse = transaction.remarks ?? '';
+      if (raw is VoucherModel && raw.remarks.isNotEmpty) {
+        remarksToParse = raw.remarks;
+      }
+
+      final rawLines = remarksToParse.split(RegExp(r'[\n•]'));
+      for (var line in rawLines) {
+        final trimmed = line.trim();
+        if (trimmed.isEmpty || trimmed.startsWith('Purchase Invoice') || trimmed.startsWith('Sales Invoice') || trimmed.contains('items):')) {
+          continue;
+        }
+
+        final openParen = trimmed.indexOf('(');
+        final closeParen = trimmed.lastIndexOf(')');
+
+        if (openParen != -1 && closeParen > openParen) {
+          final name = trimmed.substring(0, openParen).trim();
+          final detailsStr = trimmed.substring(openParen + 1, closeParen);
+
+          int qty = 1;
+          String batch = 'B001';
+          String exp = '12/28';
+          double rate = 0.0;
+          double sch = 0.0;
+          double mrp = 0.0;
+          double dis = 0.0;
+          double gst = 0.0;
+          String pack = '1S';
+          String hsn = '3004';
+
+          final pairs = detailsStr.split(',');
+          for (var pair in pairs) {
+            final parts = pair.split(':');
+            if (parts.length >= 2) {
+              final key = parts[0].trim().toLowerCase();
+              final val = parts.sublist(1).join(':').trim().replaceAll('₹', '').replaceAll('%', '');
+
+              if (key.contains('qty')) {
+                final qVal = val.split('+').first.trim();
+                qty = int.tryParse(qVal) ?? 1;
+              } else if (key.contains('batch')) {
+                batch = val.isNotEmpty ? val : 'B001';
+              } else if (key.contains('exp')) {
+                exp = val.isNotEmpty ? val : '12/28';
+              } else if (key.contains('rate')) {
+                rate = double.tryParse(val) ?? 0.0;
+              } else if (key.contains('sch')) {
+                sch = double.tryParse(val) ?? 0.0;
+              } else if (key.contains('mrp')) {
+                mrp = double.tryParse(val) ?? 0.0;
+              } else if (key.contains('dis')) {
+                dis = double.tryParse(val) ?? 0.0;
+              } else if (key.contains('gst')) {
+                gst = double.tryParse(val) ?? 0.0;
+              } else if (key.contains('pack')) {
+                pack = val.isNotEmpty ? val : '1S';
+              } else if (key.contains('hsn')) {
+                hsn = val.isNotEmpty ? val : '3004';
+              }
+            }
+          }
+
+          if (mrp == 0.0) mrp = rate;
+
+          final grossLine = qty * rate;
+
+          totalQty += qty;
+          items.add({
+            'name': name.isNotEmpty ? name : 'Medicine',
+            'batch': batch,
+            'exp': exp,
+            'qty': qty,
+            'free': 0,
+            'pack': pack,
+            'hsn': hsn,
+            'mrp': mrp,
+            'rate': rate,
+            'sch': sch,
+            'dis': dis,
+            'gst': gst,
+            'amount': grossLine,
+          });
+
+        }
+      }
+
+      if (items.isEmpty && remarksToParse.isNotEmpty && !remarksToParse.startsWith('Paid') && !remarksToParse.startsWith('Received')) {
+        final lines = remarksToParse.split(RegExp(r'[\n,]'));
+        for (var line in lines) {
+          final clean = line.replaceAll(RegExp(r'^.*Invoice.*?:?'), '').replaceAll('•', '').trim();
+          if (clean.isNotEmpty && clean.length > 2 && !clean.contains('items):')) {
+            items.add({
+              'name': clean,
+              'batch': 'B001',
+              'exp': '12/28',
+              'qty': 1,
+              'free': 0,
+              'pack': '1S',
+              'hsn': '3004',
+              'mrp': currBill,
+              'rate': currBill,
+              'sch': 0.0,
+              'dis': 0.0,
+              'gst': 0.0,
+              'amount': currBill,
+            });
+            totalQty += 1;
+          }
+        }
+      }
+
+      if (items.isEmpty) {
+        final invItems = provider.inventory.where((i) => i.supplierName.trim().toLowerCase() == party.name.trim().toLowerCase()).toList();
+        if (invItems.isNotEmpty) {
+          for (var item in invItems) {
+            totalQty += item.quantity;
+            items.add({
+              'name': item.medicineName,
+              'batch': item.batchNumber,
+              'exp': item.expiryDate,
+              'qty': item.quantity,
+              'free': 0,
+              'pack': '1S',
+              'hsn': '3004',
+              'mrp': item.mrp,
+              'rate': item.purchasePrice > 0 ? item.purchasePrice : item.salePrice,
+              'dis': 0.0,
+              'gst': 0.0,
+              'amount': (item.purchasePrice > 0 ? item.purchasePrice : item.salePrice) * item.quantity,
+            });
+          }
+        }
+      }
+
+      if (items.isNotEmpty) {
+        double calcSubTotal = 0.0;
+        double calcTotalDis = 0.0;
+        double calcGst5Taxable = 0.0, calcGst5Tax = 0.0;
+        double calcGst12Taxable = 0.0, calcGst12Tax = 0.0;
+        double calcGst18Taxable = 0.0, calcGst18Tax = 0.0;
+
+        for (var it in items) {
+          final q = (it['qty'] as num?)?.toInt() ?? 1;
+          final r = (it['rate'] as num?)?.toDouble() ?? 0.0;
+          final sch = (it['sch'] as num?)?.toDouble() ?? 0.0;
+          final d = (it['dis'] as num?)?.toDouble() ?? 0.0;
+          final g = (it['gst'] as num?)?.toDouble() ?? 0.0;
+
+          final grossLine = q * r;
+          final afterScheme = grossLine * (1.0 - (sch / 100.0));
+          final schDisAmt = grossLine * (sch / 100.0);
+          final tradeDisAmt = afterScheme * (d / 100.0);
+          final lineDis = schDisAmt + tradeDisAmt;
+          final netLineTaxable = grossLine - lineDis;
+
+          calcSubTotal += grossLine;
+          calcTotalDis += lineDis;
+
+          if (g == 5.0) {
+            calcGst5Taxable += netLineTaxable;
+            calcGst5Tax += netLineTaxable * 0.05;
+          } else if (g == 12.0) {
+            calcGst12Taxable += netLineTaxable;
+            calcGst12Tax += netLineTaxable * 0.12;
+          } else if (g == 18.0) {
+            calcGst18Taxable += netLineTaxable;
+            calcGst18Tax += netLineTaxable * 0.18;
+          }
+        }
+
+        subTotal = calcSubTotal;
+        totalDis = calcTotalDis;
+        gst5Taxable = calcGst5Taxable;
+        gst5Tax = calcGst5Tax;
+        gst12Taxable = calcGst12Taxable;
+        gst12Tax = calcGst12Tax;
+        gst18Taxable = calcGst18Taxable;
+        gst18Tax = calcGst18Tax;
+        totalTax = calcGst5Tax + calcGst12Tax + calcGst18Tax;
+        totalTaxable = calcGst5Taxable + calcGst12Taxable + calcGst18Taxable;
+
+        final unroundedNet = subTotal - totalDis + totalTax;
+        currBill = unroundedNet.roundToDouble();
+        roundOff = currBill - unroundedNet;
+      }
+      totalItems = items.length;
+      if (totalQty == 0) totalQty = 1;
+    }
+
+    double cgst = totalTax / 2.0;
+      double sgst = totalTax / 2.0;
+    String displayPartyName = party.name;
+    final agencyMatch = RegExp(r'Agency:\s*([^,\n\(\)]+)', caseSensitive: false).firstMatch(transaction.remarks ?? '');
+    if (agencyMatch != null && agencyMatch.group(1) != null && agencyMatch.group(1)!.trim().isNotEmpty) {
+      displayPartyName = agencyMatch.group(1)!.trim();
+    }
+
+    String amountInWords = _numberToIndianWords(currBill > 0 ? currBill : cashReceived);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        child: Container(
+          width: 980,
+          padding: const EdgeInsets.all(16),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.receipt_long, color: Colors.blue, size: 26),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Invoice Preview (${transaction.refNumber})',
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+                const Divider(),
+
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: Colors.black87, width: 1.2),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 6,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'M/s RAJESH MEDICOSE',
+                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black),
+                                ),
+                                const Text('CHARWALA, CHARWALA', style: TextStyle(fontSize: 11, color: Colors.black87)),
+                                const Text('Ph.No.: 9050524678', style: TextStyle(fontSize: 11, color: Colors.black87)),
+                                const Text('D.L.No.: 7970/7970-OBR | GST: 06AAAAA0000A1Z5', style: TextStyle(fontSize: 10, color: Colors.black87)),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Agency / Supplier: $displayPartyName',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.blue),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            flex: 4,
+                            child: Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.black54),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  const Text(
+                                    'GST INVOICE - CREDIT',
+                                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Invoice No.: ${transaction.refNumber}',
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                  ),
+                                  Text(
+                                    'Date: ${DateFormat('dd-MM-yyyy').format(transaction.date)}',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                  Text(
+                                    'Due Date: ${DateFormat('dd-MM-yyyy').format(transaction.date)}',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+
+                      Container(
+                        decoration: BoxDecoration(border: Border.all(color: Colors.black87)),
+                        child: Column(
+                          children: [
+                            Container(
+                              color: Colors.grey.shade300,
+                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+                              child: const Row(
+                                children: [
+                                  SizedBox(width: 24, child: Text('Sn.', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  SizedBox(width: 32, child: Text('Qty.', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  SizedBox(width: 32, child: Text('Free', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  SizedBox(width: 50, child: Text('Pack', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  Expanded(flex: 4, child: Text('Product', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  Expanded(flex: 2, child: Text('Batch', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  SizedBox(width: 40, child: Text('Exp.', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  SizedBox(width: 55, child: Text('HSN', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  SizedBox(width: 45, child: Text('MRP', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  SizedBox(width: 45, child: Text('Rate', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  SizedBox(width: 35, child: Text('Sch.', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  SizedBox(width: 35, child: Text('Dis.%', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  SizedBox(width: 35, child: Text('GST%', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                  SizedBox(width: 55, child: Text('Amount', textAlign: TextAlign.right, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                ],
+                              ),
+                            ),
+                            const Divider(height: 1, color: Colors.black87),
+
+                            if (items.isEmpty)
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                child: Text(
+                                  'Transaction Type: ${transaction.type} | Ref: ${transaction.refNumber} | Amount: ₹${transaction.totalAmount.toStringAsFixed(2)}',
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                              )
+                            else
+                              Column(
+                                children: items.asMap().entries.map((entry) {
+                                  final idx = entry.key;
+                                  final it = entry.value;
+                                  final schVal = (it['sch'] as num?)?.toDouble() ?? 0.0;
+                                  final q = (it['qty'] as num?)?.toInt() ?? 1;
+                                  final r = (it['rate'] as num?)?.toDouble() ?? 0.0;
+                                  final lineGross = q * r;
+
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 6),
+                                    child: Row(
+                                      children: [
+                                        SizedBox(width: 24, child: Text('${idx + 1}.', style: const TextStyle(fontSize: 10))),
+                                        SizedBox(width: 32, child: Text('$q', style: const TextStyle(fontSize: 10))),
+                                        SizedBox(width: 32, child: Text('${it['free']}', style: const TextStyle(fontSize: 10))),
+                                        SizedBox(width: 50, child: Text('${it['pack']}', style: const TextStyle(fontSize: 10))),
+                                        Expanded(flex: 4, child: Text('${it['name']}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                                        Expanded(flex: 2, child: Text('${it['batch']}', style: const TextStyle(fontSize: 10))),
+                                        SizedBox(width: 40, child: Text('${it['exp']}', style: const TextStyle(fontSize: 10))),
+                                        SizedBox(width: 55, child: Text('${it['hsn']}', style: const TextStyle(fontSize: 10))),
+                                        SizedBox(width: 45, child: Text((it['mrp'] as double).toStringAsFixed(2), style: const TextStyle(fontSize: 10))),
+                                        SizedBox(width: 45, child: Text(r.toStringAsFixed(2), style: const TextStyle(fontSize: 10))),
+                                        SizedBox(width: 35, child: Text(schVal.toStringAsFixed(2), style: const TextStyle(fontSize: 10))),
+                                        SizedBox(width: 35, child: Text((it['dis'] as double).toStringAsFixed(1), style: const TextStyle(fontSize: 10))),
+                                        SizedBox(width: 35, child: Text((it['gst'] as double).toStringAsFixed(1), style: const TextStyle(fontSize: 10))),
+                                        SizedBox(width: 55, child: Text(lineGross.toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold))),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+
+                      Container(
+                        decoration: BoxDecoration(border: Border.all(color: Colors.black)),
+                        child: Column(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                              decoration: const BoxDecoration(
+                                color: Color(0xFFF3F4F6),
+                                border: Border(bottom: BorderSide(color: Colors.black)),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text('CASH RECEIVED: ${cashReceived.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                                  Text('PREV. BAL.: ${prevBal.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                                  Text('CURR. BILL: ${currBill.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                                  Text('TOTAL O/S: ${totalOs.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.blue)),
+                                ],
+                              ),
+                            ),
+
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  flex: 4,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: const BoxDecoration(
+                                      border: Border(right: BorderSide(color: Colors.black)),
+                                    ),
+                                    child: Table(
+                                      border: TableBorder.all(color: Colors.black45, width: 0.5),
+                                      children: [
+                                        const TableRow(
+                                          decoration: BoxDecoration(color: Color(0xFFE5E7EB)),
+                                          children: [
+                                            Padding(padding: EdgeInsets.all(2), child: Text('GST%', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold))),
+                                            Padding(padding: EdgeInsets.all(2), child: Text('TAXABLE AMT.', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold))),
+                                            Padding(padding: EdgeInsets.all(2), child: Text('TAX AMT.', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold))),
+                                          ],
+                                        ),
+                                        TableRow(children: [
+                                          const Padding(padding: EdgeInsets.all(2), child: Text('GST 5.00', style: TextStyle(fontSize: 9))),
+                                          Padding(padding: const EdgeInsets.all(2), child: Text(gst5Taxable.toStringAsFixed(2), style: const TextStyle(fontSize: 9))),
+                                          Padding(padding: const EdgeInsets.all(2), child: Text(gst5Tax.toStringAsFixed(2), style: const TextStyle(fontSize: 9))),
+                                        ]),
+                                        TableRow(children: [
+                                          const Padding(padding: EdgeInsets.all(2), child: Text('GST 12.00', style: TextStyle(fontSize: 9))),
+                                          Padding(padding: const EdgeInsets.all(2), child: Text(gst12Taxable.toStringAsFixed(2), style: const TextStyle(fontSize: 9))),
+                                          Padding(padding: const EdgeInsets.all(2), child: Text(gst12Tax.toStringAsFixed(2), style: const TextStyle(fontSize: 9))),
+                                        ]),
+                                        TableRow(children: [
+                                          const Padding(padding: EdgeInsets.all(2), child: Text('GST 18.00', style: TextStyle(fontSize: 9))),
+                                          Padding(padding: const EdgeInsets.all(2), child: Text(gst18Taxable.toStringAsFixed(2), style: const TextStyle(fontSize: 9))),
+                                          Padding(padding: const EdgeInsets.all(2), child: Text(gst18Tax.toStringAsFixed(2), style: const TextStyle(fontSize: 9))),
+                                        ]),
+                                        const TableRow(children: [
+                                          Padding(padding: EdgeInsets.all(2), child: Text('EXEMPT', style: TextStyle(fontSize: 9))),
+                                          Padding(padding: EdgeInsets.all(2), child: Text('0.00', style: TextStyle(fontSize: 9))),
+                                          Padding(padding: EdgeInsets.all(2), child: Text('0.00', style: TextStyle(fontSize: 9))),
+                                        ]),
+                                        TableRow(children: [
+                                          const Padding(padding: EdgeInsets.all(2), child: Text('TOTAL', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold))),
+                                          Padding(padding: const EdgeInsets.all(2), child: Text(totalTaxable.toStringAsFixed(2), style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold))),
+                                          Padding(padding: const EdgeInsets.all(2), child: Text(totalTax.toStringAsFixed(2), style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold))),
+                                        ]),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+
+                                Expanded(
+                                  flex: 3,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: const BoxDecoration(
+                                      border: Border(right: BorderSide(color: Colors.black)),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            const Text('Total Items :-', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                            Text('$totalItems', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            const Text('Total Qty :-', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                            Text('$totalQty', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+
+                                Expanded(
+                                  flex: 4,
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(6.0),
+                                    child: Column(
+                                      children: [
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            const Text('SUB TOTAL', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                            Text(subTotal.toStringAsFixed(2), style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                          ],
+                                        ),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            const Text('DISCOUNT', style: TextStyle(fontSize: 10)),
+                                            Text(totalDis.toStringAsFixed(2), style: const TextStyle(fontSize: 10)),
+                                          ],
+                                        ),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            const Text('CGST PAYABLE', style: TextStyle(fontSize: 10)),
+                                            Text(cgst.toStringAsFixed(2), style: const TextStyle(fontSize: 10)),
+                                          ],
+                                        ),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            const Text('SGST PAYABLE', style: TextStyle(fontSize: 10)),
+                                            Text(sgst.toStringAsFixed(2), style: const TextStyle(fontSize: 10)),
+                                          ],
+                                        ),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            const Text('ROUND OFF', style: TextStyle(fontSize: 10)),
+                                            Text(roundOff.toStringAsFixed(2), style: const TextStyle(fontSize: 10)),
+                                          ],
+                                        ),
+                                        const Divider(height: 6, color: Colors.black),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            const Text('GRAND TOTAL', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                            Text(currBill.toStringAsFixed(2), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.blue)),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+
+                            Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: const BoxDecoration(
+                                border: Border(top: BorderSide(color: Colors.black)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Rs. ${amountInWords.isNotEmpty ? amountInWords : "Zero"} only',
+                                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      const Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text('Terms & Conditions:', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, decoration: TextDecoration.underline)),
+                                          Text('Goods once sold will not be taken back or exchanged.', style: TextStyle(fontSize: 8)),
+                                          Text('All disputes subject to Jurisdiction only.', style: TextStyle(fontSize: 8)),
+                                        ],
+                                      ),
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.end,
+                                        children: [
+                                          Text('For ${party.name}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                          const SizedBox(height: 16),
+                                          const Text('Auth. Sign.', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold)),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.pop(ctx),
+                      icon: const Icon(Icons.close, size: 16),
+                      label: const Text('Close'),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        final pdfBytes = await PdfService.generateWholesaleInvoicePdf(
+                          invoiceNumber: transaction.refNumber,
+                          date: transaction.date,
+                          partyName: party.name,
+                          partyAddress: party.address ?? 'Wholesale Distributor',
+                          items: items,
+                          cashReceived: cashReceived,
+                          prevBalance: prevBal,
+                          currBill: currBill,
+                          totalOutstanding: totalOs,
+                          subTotal: subTotal,
+                          discount: totalDis,
+                          gst5Taxable: gst5Taxable,
+                          gst5Tax: gst5Tax,
+                          gst12Taxable: gst12Taxable,
+                          gst12Tax: gst12Tax,
+                          gst18Taxable: gst18Taxable,
+                          gst18Tax: gst18Tax,
+                          exemptTaxable: 0.0,
+                          totalTaxable: totalTaxable,
+                          totalTax: totalTax,
+                          cgst: cgst,
+                          sgst: sgst,
+                          roundOff: roundOff,
+                          grandTotal: currBill > 0 ? currBill : cashReceived,
+                        );
+                        await Printing.layoutPdf(
+                          onLayout: (PdfPageFormat format) async => pdfBytes,
+                          name: 'Invoice_${transaction.refNumber}',
+                        );
+                      },
+                      icon: const Icon(Icons.print, size: 16),
+                      label: const Text('Print / Thermal PDF'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -2447,78 +3303,66 @@ class _PartiesScreenState extends State<PartiesScreen> {
                                               ),
                                             )
                                           : SingleChildScrollView(
-                                              child: SingleChildScrollView(
-                                                scrollDirection: Axis.horizontal,
+                                              child: SizedBox(
+                                                width: double.infinity,
                                                 child: DataTable(
-                                                  columnSpacing: 18,
+                                                  columnSpacing: 14,
                                                   showCheckboxColumn: false,
                                                   columns: const [
                                                     DataColumn(label: Text('Type', style: TextStyle(fontWeight: FontWeight.bold))),
                                                     DataColumn(label: Text('Ref Number', style: TextStyle(fontWeight: FontWeight.bold))),
                                                     DataColumn(label: Text('Date & Time', style: TextStyle(fontWeight: FontWeight.bold))),
                                                     DataColumn(label: Text('Total (₹)', style: TextStyle(fontWeight: FontWeight.bold))),
-                                                    DataColumn(label: Text('Status / Remarks', style: TextStyle(fontWeight: FontWeight.bold))),
                                                     DataColumn(label: Text('Action', style: TextStyle(fontWeight: FontWeight.bold))),
                                                   ],
-                                                rows: transactions.map((t) {
-                                                  final isOut = t.type == 'Payment-Out' || t.type == 'Purchase';
-                                                  return DataRow(
-                                                    onSelectChanged: (_) => _showTransactionDetailsDialog(context, selectedParty, t, provider),
-                                                    cells: [
-                                                      DataCell(
-                                                        Container(
-                                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                                          decoration: BoxDecoration(
-                                                            color: isOut ? Colors.orange.withValues(alpha: 0.12) : AppColors.success.withValues(alpha: 0.12),
-                                                            borderRadius: BorderRadius.circular(6),
-                                                          ),
-                                                          child: Text(
-                                                            t.type,
-                                                            style: TextStyle(
-                                                              color: isOut ? Colors.orange.shade800 : AppColors.success,
-                                                              fontWeight: FontWeight.bold,
-                                                              fontSize: 11,
+                                                  rows: transactions.map((t) {
+                                                    final isOut = t.type == 'Payment-Out' || t.type == 'Purchase';
+                                                    return DataRow(
+                                                      onSelectChanged: (_) => _showTransactionDetailsDialog(context, selectedParty, t, provider),
+                                                      cells: [
+                                                        DataCell(
+                                                          Container(
+                                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                            decoration: BoxDecoration(
+                                                              color: isOut ? Colors.orange.withValues(alpha: 0.12) : AppColors.success.withValues(alpha: 0.12),
+                                                              borderRadius: BorderRadius.circular(6),
+                                                            ),
+                                                            child: Text(
+                                                              t.type,
+                                                              style: TextStyle(
+                                                                color: isOut ? Colors.orange.shade800 : AppColors.success,
+                                                                fontWeight: FontWeight.bold,
+                                                                fontSize: 11,
+                                                              ),
                                                             ),
                                                           ),
                                                         ),
-                                                      ),
-                                                      DataCell(Text(t.refNumber, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12))),
-                                                      DataCell(Text(DateFormat('dd/MM/yyyy, hh:mm a').format(t.date), style: const TextStyle(fontSize: 12))),
-                                                      DataCell(Text('₹${t.totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
-                                                      DataCell(
-                                                        Column(
-                                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                                          mainAxisAlignment: MainAxisAlignment.center,
-                                                          children: [
-                                                            Text(t.status, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                                                            if (t.remarks != null && t.remarks!.isNotEmpty)
-                                                              Text(t.remarks!, style: const TextStyle(fontSize: 10, color: AppColors.textMuted), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                                          ],
+                                                        DataCell(Text(t.refNumber, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12))),
+                                                        DataCell(Text(DateFormat('dd/MM/yyyy, hh:mm a').format(t.date), style: const TextStyle(fontSize: 12))),
+                                                        DataCell(Text('₹${t.totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
+                                                        DataCell(
+                                                          Row(
+                                                            mainAxisSize: MainAxisSize.min,
+                                                            children: [
+                                                              IconButton(
+                                                                icon: const Icon(Icons.visibility_outlined, size: 18, color: AppColors.primary),
+                                                                tooltip: 'View Transaction Details',
+                                                                onPressed: () => _showTransactionDetailsDialog(context, selectedParty, t, provider),
+                                                              ),
+                                                              IconButton(
+                                                                icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                                                                tooltip: 'Delete Transaction',
+                                                                onPressed: () => _deleteTransaction(context, selectedParty, t, provider),
+                                                              ),
+                                                            ],
+                                                          ),
                                                         ),
-                                                      ),
-                                                      DataCell(
-                                                        Row(
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            IconButton(
-                                                              icon: const Icon(Icons.visibility_outlined, size: 18, color: AppColors.primary),
-                                                              tooltip: 'View Transaction Details',
-                                                              onPressed: () => _showTransactionDetailsDialog(context, selectedParty, t, provider),
-                                                            ),
-                                                            IconButton(
-                                                              icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),
-                                                              tooltip: 'Delete Transaction',
-                                                              onPressed: () => _deleteTransaction(context, selectedParty, t, provider),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  );
-                                                }).toList(),
+                                                      ],
+                                                    );
+                                                  }).toList(),
+                                                ),
                                               ),
                                             ),
-                                          ),
                                     ),
                                   ],
                                 ),

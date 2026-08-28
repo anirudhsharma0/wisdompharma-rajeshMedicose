@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../../core/constants/colors.dart';
 import '../../../providers/dashboard_provider.dart';
+import '../../common/screens/bill_scanner_screen.dart';
+import '../../common/screens/pending_bills_screen.dart';
 
 class MobileDashboardScreen extends StatelessWidget {
   const MobileDashboardScreen({super.key});
@@ -146,6 +148,64 @@ class MobileDashboardScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // AI Bill Scanner & Pending Bills Quick Action Buttons
+                Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const BillScannerScreen(),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.document_scanner, size: 18),
+                          label: const Text(
+                            '📷 AI Scanner',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.teal,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            elevation: 3,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const PendingBillsScreen(),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.playlist_add_check, size: 18),
+                          label: const Text(
+                            '📋 Pending Bills',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange.shade700,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            elevation: 3,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
                 // Quick KPIs Grid (Styled modern cards)
                 GridView.count(
                   crossAxisCount: 2,

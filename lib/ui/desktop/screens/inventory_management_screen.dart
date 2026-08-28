@@ -108,10 +108,8 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
         await provider.addSupplier(SupplierModel(name: supplier, contact: ''));
       }
 
-      final remainingDue = totalBill - paidAmount;
-      if (remainingDue > 0) {
-        await provider.addSupplierDue(supplier, remainingDue);
-      }
+      // Record full purchase bill total
+      await provider.addSupplierDue(supplier, totalBill);
 
       if (paidAmount > 0) {
         final voucher = await provider.paySupplier(
@@ -125,7 +123,7 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
         if (voucher != null && mounted) {
           final supModel = provider.suppliers.firstWhere(
             (s) => s.name.trim().toLowerCase() == supplier.toLowerCase(),
-            orElse: () => SupplierModel(name: supplier, contact: '', due: remainingDue),
+            orElse: () => SupplierModel(name: supplier, contact: ''),
           );
 
           final pdfBytes = await PdfService.generatePaymentReceiptPdf(
@@ -137,7 +135,7 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
             referenceNumber: receiptNo,
             remarks: 'Stock Entry: $name (Batch $batch)',
             createdAt: DateTime.now(),
-            remainingBalance: (supModel.due - paidAmount).clamp(0.0, 9999999.0),
+            remainingBalance: supModel.due.clamp(0.0, 9999999.0),
             agencyName: supplier,
           );
 
