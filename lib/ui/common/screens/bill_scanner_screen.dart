@@ -28,6 +28,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
   final _invoiceNoController = TextEditingController();
   final _invoiceDateController = TextEditingController();
   final _grandTotalController = TextEditingController();
+  final _billDiscountController = TextEditingController();
 
   final ImagePicker _picker = ImagePicker();
 
@@ -37,6 +38,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
     _invoiceNoController.dispose();
     _invoiceDateController.dispose();
     _grandTotalController.dispose();
+    _billDiscountController.dispose();
     super.dispose();
   }
 
@@ -92,6 +94,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
         _invoiceNoController.text = scannedBill.invoiceNumber;
         _invoiceDateController.text = scannedBill.invoiceDate;
         _grandTotalController.text = scannedBill.grandTotal.toStringAsFixed(2);
+        _billDiscountController.text = scannedBill.billDiscountPercent.toStringAsFixed(2);
         _isScanning = false;
         _statusText = 'Scan Complete! ${scannedBill.items.length} items extracted.';
       });
@@ -501,12 +504,34 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: TextField(
+                              controller: _billDiscountController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: const InputDecoration(
+                                labelText: 'Bill Discount (%)',
+                                border: OutlineInputBorder(),
+                                suffixText: '%',
+                              ),
+                              onChanged: (val) {
+                                setState(() {
+                                  _scannedBill!.billDiscountPercent = double.tryParse(val) ?? 0.0;
+                                });
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextField(
                               controller: _grandTotalController,
                               keyboardType: const TextInputType.numberWithOptions(decimal: true),
                               decoration: const InputDecoration(
                                 labelText: 'Grand Total (₹)',
                                 border: OutlineInputBorder(),
                               ),
+                              onChanged: (val) {
+                                setState(() {
+                                  _scannedBill!.grandTotal = double.tryParse(val) ?? 0.0;
+                                });
+                              },
                             ),
                           ),
                         ],
@@ -559,9 +584,11 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceAround,
                               children: [
-                                _buildSummaryTile('Taxable Subtotal', '₹${_scannedBill!.calculatedTaxableTotal.toStringAsFixed(2)}'),
-                                _buildSummaryTile('Total GST (CGST+SGST)', '₹${_scannedBill!.calculatedGstTotal.toStringAsFixed(2)}'),
-                                _buildSummaryTile('Calculated Total', '₹${_scannedBill!.calculatedGrandTotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('Items Subtotal', '₹${_scannedBill!.itemsSubtotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('Bill Disc (${_scannedBill!.billDiscountPercent.toStringAsFixed(1)}%)', '-₹${_scannedBill!.calculatedBillDiscount.toStringAsFixed(2)}', color: Colors.red.shade700),
+                                _buildSummaryTile('Net Taxable', '₹${_scannedBill!.calculatedTaxableTotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('GST (CGST+SGST)', '₹${_scannedBill!.calculatedGstTotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('Calculated Total', '₹${_scannedBill!.calculatedGrandTotal.toStringAsFixed(2)}', color: AppColors.teal),
                                 _buildSummaryTile('Round Off', '₹${_scannedBill!.roundOff.toStringAsFixed(2)}', color: Colors.orange.shade800),
                               ],
                             ),
