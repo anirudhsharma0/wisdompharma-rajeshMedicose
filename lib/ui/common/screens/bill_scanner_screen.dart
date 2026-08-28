@@ -511,6 +511,63 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                           ),
                         ],
                       ),
+                      const SizedBox(height: 12),
+                      // Calculation Engine Summary & Mode Toggle Card
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.teal.withAlpha(20),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.teal.withAlpha(80)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Row(
+                                  children: [
+                                    Icon(Icons.calculate, color: AppColors.teal, size: 20),
+                                    SizedBox(width: 6),
+                                    Text(
+                                      'Smart GST Calculation Breakdown',
+                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.teal),
+                                    ),
+                                  ],
+                                ),
+                                Row(
+                                  children: [
+                                    const Text('Taxable Table Column', style: TextStyle(fontSize: 12)),
+                                    Switch(
+                                      value: _scannedBill!.isAmountTaxable,
+                                      activeColor: AppColors.teal,
+                                      onChanged: (val) {
+                                        setState(() {
+                                          _scannedBill!.isAmountTaxable = val;
+                                          for (var item in _scannedBill!.items) {
+                                            item.netAmount = val ? item.taxableAmount : item.calculatedNet;
+                                          }
+                                        });
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            const Divider(),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceAround,
+                              children: [
+                                _buildSummaryTile('Taxable Subtotal', '₹${_scannedBill!.calculatedTaxableTotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('Total GST (CGST+SGST)', '₹${_scannedBill!.calculatedGstTotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('Calculated Total', '₹${_scannedBill!.calculatedGrandTotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('Round Off', '₹${_scannedBill!.roundOff.toStringAsFixed(2)}', color: Colors.orange.shade800),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -629,7 +686,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                       initialValue: item.quantity.toString(),
                                       keyboardType: TextInputType.number,
                                       decoration: const InputDecoration(border: InputBorder.none),
-                                      onChanged: (val) => item.quantity = int.tryParse(val) ?? item.quantity,
+                                      onChanged: (val) => setState(() => item.quantity = int.tryParse(val) ?? item.quantity),
                                     ),
                                   ),
                                 ),
@@ -640,7 +697,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                       initialValue: item.freeQty.toString(),
                                       keyboardType: TextInputType.number,
                                       decoration: const InputDecoration(border: InputBorder.none),
-                                      onChanged: (val) => item.freeQty = int.tryParse(val) ?? item.freeQty,
+                                      onChanged: (val) => setState(() => item.freeQty = int.tryParse(val) ?? item.freeQty),
                                     ),
                                   ),
                                 ),
@@ -651,7 +708,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                       initialValue: item.mrp.toStringAsFixed(2),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                       decoration: const InputDecoration(border: InputBorder.none),
-                                      onChanged: (val) => item.mrp = double.tryParse(val) ?? item.mrp,
+                                      onChanged: (val) => setState(() => item.mrp = double.tryParse(val) ?? item.mrp),
                                     ),
                                   ),
                                 ),
@@ -662,7 +719,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                       initialValue: item.purchaseRate.toStringAsFixed(2),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                       decoration: const InputDecoration(border: InputBorder.none),
-                                      onChanged: (val) => item.purchaseRate = double.tryParse(val) ?? item.purchaseRate,
+                                      onChanged: (val) => setState(() => item.purchaseRate = double.tryParse(val) ?? item.purchaseRate),
                                     ),
                                   ),
                                 ),
@@ -673,7 +730,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                       initialValue: item.schemeDiscount.toStringAsFixed(1),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                       decoration: const InputDecoration(border: InputBorder.none),
-                                      onChanged: (val) => item.schemeDiscount = double.tryParse(val) ?? item.schemeDiscount,
+                                      onChanged: (val) => setState(() => item.schemeDiscount = double.tryParse(val) ?? item.schemeDiscount),
                                     ),
                                   ),
                                 ),
@@ -684,7 +741,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                       initialValue: item.discountPercent.toStringAsFixed(1),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                       decoration: const InputDecoration(border: InputBorder.none),
-                                      onChanged: (val) => item.discountPercent = double.tryParse(val) ?? item.discountPercent,
+                                      onChanged: (val) => setState(() => item.discountPercent = double.tryParse(val) ?? item.discountPercent),
                                     ),
                                   ),
                                 ),
@@ -695,7 +752,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                       initialValue: item.gstPercent.toStringAsFixed(1),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                       decoration: const InputDecoration(border: InputBorder.none),
-                                      onChanged: (val) => item.gstPercent = double.tryParse(val) ?? item.gstPercent,
+                                      onChanged: (val) => setState(() => item.gstPercent = double.tryParse(val) ?? item.gstPercent),
                                     ),
                                   ),
                                 ),
@@ -706,7 +763,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                       initialValue: item.netAmount.toStringAsFixed(2),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                       decoration: const InputDecoration(border: InputBorder.none),
-                                      onChanged: (val) => item.netAmount = double.tryParse(val) ?? item.netAmount,
+                                      onChanged: (val) => setState(() => item.netAmount = double.tryParse(val) ?? item.netAmount),
                                     ),
                                   ),
                                 ),
@@ -769,6 +826,19 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildSummaryTile(String label, String value, {Color? color}) {
+    return Column(
+      children: [
+        Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w500)),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: color ?? AppColors.slate800),
+        ),
+      ],
     );
   }
 }

@@ -45,23 +45,82 @@ class ScannedBillItem {
     required this.netAmount,
   });
 
+  double get grossAmount => quantity * purchaseRate;
+
+  double get schemeDiscountAmount {
+    if (schemeDiscount <= 0) return 0.0;
+    if (schemeDiscount <= 100) {
+      return grossAmount * (schemeDiscount / 100);
+    }
+    return schemeDiscount;
+  }
+
+  double get tradeDiscountAmount {
+    final afterScheme = grossAmount - schemeDiscountAmount;
+    if (discountPercent <= 0) return 0.0;
+    return afterScheme * (discountPercent / 100);
+  }
+
+  double get taxableAmount {
+    final tax = grossAmount - schemeDiscountAmount - tradeDiscountAmount;
+    return tax > 0 ? tax : 0.0;
+  }
+
+  double get gstAmount {
+    if (gstPercent <= 0) return 0.0;
+    return taxableAmount * (gstPercent / 100);
+  }
+
+  double get calculatedNet {
+    return taxableAmount + gstAmount;
+  }
+
   factory ScannedBillItem.fromJson(Map<String, dynamic> json, int index) {
-    return ScannedBillItem(
+    final qty = (json['quantity'] ?? json['qty'] ?? 1) is num
+        ? (json['quantity'] ?? json['qty'] ?? 1).toInt()
+        : int.tryParse((json['quantity'] ?? json['qty'] ?? 1).toString()) ?? 1;
+    final rate = (json['purchaseRate'] ?? json['rate'] as num?)?.toDouble() ??
+        double.tryParse((json['purchaseRate'] ?? json['rate'] ?? '0').toString()) ??
+        0.0;
+    final sch = (json['schemeDiscount'] ?? json['scheme'] ?? json['sch'] as num?)?.toDouble() ??
+        double.tryParse((json['schemeDiscount'] ?? json['scheme'] ?? json['sch'] ?? '0').toString()) ??
+        0.0;
+    final dis = (json['discountPercent'] ?? json['dis'] as num?)?.toDouble() ??
+        double.tryParse((json['discountPercent'] ?? json['dis'] ?? '0').toString()) ??
+        0.0;
+    final gst = (json['gstPercent'] ?? json['gst'] as num?)?.toDouble() ??
+        double.tryParse((json['gstPercent'] ?? json['gst'] ?? '0').toString()) ??
+        0.0;
+
+    double net = (json['netAmount'] ?? json['amount'] as num?)?.toDouble() ??
+        double.tryParse((json['netAmount'] ?? json['amount'] ?? '0').toString()) ??
+        0.0;
+
+    final item = ScannedBillItem(
       srNo: (json['srNo'] as num?)?.toInt() ?? (index + 1),
       productName: (json['productName'] ?? json['product'] ?? json['name'] ?? 'Unknown Item').toString(),
       pack: (json['pack'] ?? '').toString(),
-      quantity: (json['quantity'] ?? json['qty'] ?? 1) is num ? (json['quantity'] ?? json['qty'] ?? 1).toInt() : int.tryParse(json['quantity'].toString()) ?? 1,
-      freeQty: (json['freeQty'] ?? json['free'] ?? 0) is num ? (json['freeQty'] ?? json['free'] ?? 0).toInt() : int.tryParse(json['freeQty'].toString()) ?? 0,
+      quantity: qty > 0 ? qty : 1,
+      freeQty: (json['freeQty'] ?? json['free'] ?? 0) is num
+          ? (json['freeQty'] ?? json['free'] ?? 0).toInt()
+          : int.tryParse((json['freeQty'] ?? json['free'] ?? '0').toString()) ?? 0,
       batchNumber: (json['batchNumber'] ?? json['batch'] ?? 'N/A').toString(),
       expiryDate: (json['expiryDate'] ?? json['expiry'] ?? json['exp'] ?? 'N/A').toString(),
       hsn: (json['hsn'] ?? '').toString(),
-      mrp: (json['mrp'] as num?)?.toDouble() ?? double.tryParse(json['mrp'].toString()) ?? 0.0,
-      purchaseRate: (json['purchaseRate'] ?? json['rate'] as num?)?.toDouble() ?? double.tryParse(json['purchaseRate'].toString()) ?? 0.0,
-      schemeDiscount: (json['schemeDiscount'] ?? json['scheme'] ?? json['sch'] as num?)?.toDouble() ?? double.tryParse((json['schemeDiscount'] ?? json['scheme'] ?? json['sch'] ?? '0').toString()) ?? 0.0,
-      discountPercent: (json['discountPercent'] ?? json['dis'] as num?)?.toDouble() ?? double.tryParse(json['discountPercent'].toString()) ?? 0.0,
-      gstPercent: (json['gstPercent'] ?? json['gst'] as num?)?.toDouble() ?? double.tryParse(json['gstPercent'].toString()) ?? 0.0,
-      netAmount: (json['netAmount'] ?? json['amount'] as num?)?.toDouble() ?? double.tryParse(json['netAmount'].toString()) ?? 0.0,
+      mrp: (json['mrp'] as num?)?.toDouble() ?? double.tryParse((json['mrp'] ?? '0').toString()) ?? 0.0,
+      purchaseRate: rate,
+      schemeDiscount: sch,
+      discountPercent: dis,
+      gstPercent: gst,
+      netAmount: net,
     );
+
+    // If printed net amount is missing or zero, compute using GST formula
+    if (item.netAmount <= 0) {
+      item.netAmount = item.calculatedNet;
+    }
+
+    return item;
   }
 
   Map<String, dynamic> toJson() {
@@ -94,6 +153,7 @@ class ScannedBillModel {
   List<ScannedBillItem> items;
   DateTime scannedAt;
   String status; // 'pending', 'approved', 'rejected'
+  bool isAmountTaxable; // true if printed table column is taxable amount before GST
 
   ScannedBillModel({
     String? id,
@@ -104,8 +164,20 @@ class ScannedBillModel {
     required this.items,
     DateTime? scannedAt,
     this.status = 'pending',
+    this.isAmountTaxable = false,
   })  : id = id ?? 'sb_${DateTime.now().millisecondsSinceEpoch}',
         scannedAt = scannedAt ?? DateTime.now();
+
+  double get calculatedTaxableTotal => items.fold(0.0, (sum, i) => sum + i.taxableAmount);
+  double get calculatedGstTotal => items.fold(0.0, (sum, i) => sum + i.gstAmount);
+  double get calculatedGrandTotal => items.fold(0.0, (sum, i) => sum + i.calculatedNet);
+
+  double get roundOff {
+    if (grandTotal > 0) {
+      return grandTotal - calculatedGrandTotal;
+    }
+    return 0.0;
+  }
 
   factory ScannedBillModel.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'] as List? ?? [];
@@ -116,16 +188,26 @@ class ScannedBillModel {
       }
     }
 
-    return ScannedBillModel(
+    final parsedGrandTotal = (json['grandTotal'] ?? json['totalAmount'] ?? json['grand_total'] as num?)?.toDouble() ?? 0.0;
+
+    final bill = ScannedBillModel(
       id: json['id']?.toString(),
-      supplierName: (json['supplierName'] ?? json['supplier'] ?? json['vendor'] ?? 'RAM MEDICAL AGENCY').toString(),
+      supplierName: (json['supplierName'] ?? json['supplier'] ?? json['vendor'] ?? 'PURCHASE AGENCY').toString(),
       invoiceNumber: (json['invoiceNumber'] ?? json['invoiceNo'] ?? json['billNo'] ?? '').toString(),
       invoiceDate: (json['invoiceDate'] ?? json['date'] ?? '').toString(),
-      grandTotal: (json['grandTotal'] ?? json['totalAmount'] ?? json['grand_total'] as num?)?.toDouble() ?? 0.0,
+      grandTotal: parsedGrandTotal,
       items: parsedItems,
       scannedAt: json['scannedAt'] != null ? DateTime.tryParse(json['scannedAt'].toString()) : null,
       status: json['status']?.toString() ?? 'pending',
+      isAmountTaxable: json['isAmountTaxable'] == true,
     );
+
+    // Auto-fill grand total if missing
+    if (bill.grandTotal <= 0 && bill.items.isNotEmpty) {
+      bill.grandTotal = bill.calculatedGrandTotal;
+    }
+
+    return bill;
   }
 
   Map<String, dynamic> toJson() {
@@ -138,6 +220,7 @@ class ScannedBillModel {
       'items': items.map((i) => i.toJson()).toList(),
       'scannedAt': scannedAt.toIso8601String(),
       'status': status,
+      'isAmountTaxable': isAmountTaxable,
     };
   }
 }
@@ -279,37 +362,42 @@ class BillOcrService {
     debugPrint('Scanning bill: image size=${imageBytes.length} bytes, detected mimeType=$effectiveMimeType');
 
     final promptText = '''
-You are an expert OCR scanner for Indian wholesale medicine purchase invoices/bills.
-Analyze the provided bill photo image with 100% precision.
-Extract the header details and all line items from the table.
+You are an expert OCR scanner for Indian wholesale medicine purchase invoices (e.g. Marg ERP, Busy, Tally bills from distributors like Manav, Kissan, Ram, Ganpati, Friends Medical Agency).
+Analyze the provided bill image with 100% precision.
+Extract header details, all line items, free quantities, discounts, tax rates, and final printed totals.
 
-Required JSON Structure (Return ONLY raw valid JSON text, no markdown backticks, no explanatory commentary):
+Required JSON Structure (Return ONLY raw valid JSON text, no markdown backticks, no explanatory text):
 {
-  "supplierName": "Name of Distributor/Agency selling the items (e.g. RAM MEDICAL AGENCY)",
-  "invoiceNumber": "Invoice/Bill Number (e.g. E001634)",
-  "invoiceDate": "Date of invoice (e.g. 30-07-2026)",
-  "grandTotal": 6605.00,
+  "supplierName": "Full Name of Distributor/Agency (e.g. MANAV HEALTH CARE MEDICAL AGENCY)",
+  "invoiceNumber": "Invoice/Bill Number (e.g. A000892 or E002057)",
+  "invoiceDate": "Date of invoice (e.g. 24-08-2026)",
+  "grandTotal": 5473.00,
+  "isAmountTaxable": false,
   "items": [
     {
       "srNo": 1,
-      "productName": "Full Medicine/Product Name (e.g. AMBIPLEX LIQ.)",
-      "pack": "Pack Size (e.g. 5LTR)",
-      "quantity": 1,
+      "productName": "Medicine/Product Name (e.g. AMBIPLEX LIQ.)",
+      "pack": "Pack Size (e.g. 100ML or 5LTR)",
+      "quantity": 2,
       "freeQty": 0,
-      "batchNumber": "Batch Number (e.g. AB0626118)",
-      "expiryDate": "Expiry Date in MM/YY or YYYY-MM (e.g. 05/28)",
-      "hsn": "HSN Code if present",
-      "mrp": 300.00,
-      "purchaseRate": 840.00,
+      "batchNumber": "Batch Number (e.g. TN2225014)",
+      "expiryDate": "Expiry Date in MM/YY or YYYY-MM (e.g. 10/29)",
+      "hsn": "HSN Code",
+      "mrp": 275.00,
+      "purchaseRate": 210.00,
       "scheme": 0.0,
       "discountPercent": 5.0,
-      "gstPercent": 0.0,
-      "netAmount": 840.00
+      "gstPercent": 5.0,
+      "netAmount": 420.00
     }
   ]
 }
 
-Parse all items in the invoice table accurately. Extract Scheme / Sch discount column value if present into "scheme" (e.g. 0.0 or 15.0). Ensure numbers are parsed as numeric values.
+Strict Rules:
+1. Extract Qty and Free Qty accurately. If column says "Qty / Free" or "Qty + Free", separate main Qty from Free Qty.
+2. Extract Rate (Purchase Rate), Scheme Discount % (Sch %), Trade Discount % (Dis %), and GST % accurately.
+3. In "isAmountTaxable", return true if the table column "Amount" represents Taxable Value (before GST), or false if it represents Net Total Value including GST.
+4. Return ONLY valid JSON. All numeric values must be numbers.
 ''';
 
     final requestBody = {
