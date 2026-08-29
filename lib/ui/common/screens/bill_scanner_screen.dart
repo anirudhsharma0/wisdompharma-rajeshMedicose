@@ -584,12 +584,13 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceAround,
                               children: [
-                                _buildSummaryTile('Printed Subtotal', '₹${_scannedBill!.itemsSubtotal.toStringAsFixed(2)}'),
-                                _buildSummaryTile('Printed Disc (${_scannedBill!.billDiscountPercent.toStringAsFixed(1)}%)', '-₹${_scannedBill!.calculatedBillDiscount.toStringAsFixed(2)}', color: Colors.red.shade700),
-                                _buildSummaryTile('Printed Net Taxable', '₹${_scannedBill!.calculatedTaxableTotal.toStringAsFixed(2)}'),
-                                _buildSummaryTile('CGST + SGST', '₹${_scannedBill!.calculatedGstTotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('Items Subtotal', '₹${_scannedBill!.subTotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('Bill Disc (${_scannedBill!.billDiscountPercent.toStringAsFixed(1)}%)', '-₹${_scannedBill!.calculatedBillDiscount.toStringAsFixed(2)}', color: Colors.red.shade700),
+                                _buildSummaryTile('Net Taxable', '₹${_scannedBill!.netTaxableTotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('CGST (50%)', '₹${_scannedBill!.cgst.toStringAsFixed(2)}'),
+                                _buildSummaryTile('SGST (50%)', '₹${_scannedBill!.sgst.toStringAsFixed(2)}'),
                                 _buildSummaryTile('Round Off', '₹${_scannedBill!.roundOff.toStringAsFixed(2)}', color: Colors.orange.shade800),
-                                _buildSummaryTile('Printed Grand Total', '₹${_scannedBill!.grandTotal.toStringAsFixed(2)}', color: AppColors.teal),
+                                _buildSummaryTile('Payable Grand Total', '₹${_scannedBill!.calculatedGrandTotal.toStringAsFixed(2)}', color: AppColors.teal),
                               ],
                             ),
                           ],

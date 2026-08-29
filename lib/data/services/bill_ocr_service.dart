@@ -55,24 +55,27 @@ class ScannedBillItem {
     return schemeDiscount;
   }
 
+  double get afterScheme => grossAmount - schemeDiscountAmount;
+
   double get tradeDiscountAmount {
-    final afterScheme = grossAmount - schemeDiscountAmount;
     if (discountPercent <= 0) return 0.0;
     return afterScheme * (discountPercent / 100);
   }
 
-  double get taxableAmount {
-    final tax = grossAmount - schemeDiscountAmount - tradeDiscountAmount;
+  double get baseTaxableAmount {
+    final tax = afterScheme - tradeDiscountAmount;
     return tax > 0 ? tax : 0.0;
   }
 
+  double get taxableAmount => baseTaxableAmount;
+
   double get gstAmount {
     if (gstPercent <= 0) return 0.0;
-    return taxableAmount * (gstPercent / 100);
+    return baseTaxableAmount * (gstPercent / 100);
   }
 
   double get calculatedNet {
-    return netAmount > 0 ? netAmount : (taxableAmount + gstAmount);
+    return netAmount > 0 ? netAmount : (baseTaxableAmount + gstAmount);
   }
 
   factory ScannedBillItem.fromJson(Map<String, dynamic> json, int index) {
@@ -116,7 +119,7 @@ class ScannedBillItem {
     );
 
     if (item.netAmount <= 0) {
-      item.netAmount = item.taxableAmount + item.gstAmount;
+      item.netAmount = item.baseTaxableAmount + item.gstAmount;
     }
 
     return item;
@@ -186,45 +189,57 @@ class ScannedBillModel {
   })  : id = id ?? 'sb_${DateTime.now().millisecondsSinceEpoch}',
         scannedAt = scannedAt ?? DateTime.now();
 
-  double get itemsSubtotal {
+  double get subTotal {
     if (printedSubtotal > 0) return printedSubtotal;
-    return items.fold(0.0, (sum, i) => sum + (i.netAmount > 0 ? i.netAmount : i.taxableAmount));
+    return items.fold(0.0, (sum, i) => sum + i.baseTaxableAmount);
   }
+
+  double get itemsSubtotal => subTotal;
 
   double get calculatedBillDiscount {
     if (printedDiscount > 0) return printedDiscount;
     if (billDiscountAmount > 0) return billDiscountAmount;
     if (billDiscountPercent > 0) {
-      return itemsSubtotal * (billDiscountPercent / 100);
+      return subTotal * (billDiscountPercent / 100);
     }
     return 0.0;
   }
 
-  double get calculatedTaxableTotal {
+  double get netTaxableTotal {
     if (printedTaxable > 0) return printedTaxable;
-    final sub = itemsSubtotal - calculatedBillDiscount;
+    final sub = subTotal - calculatedBillDiscount;
     return sub > 0 ? sub : 0.0;
   }
+
+  double get calculatedTaxableTotal => netTaxableTotal;
 
   double get calculatedGstTotal {
     if (printedCgst > 0 || printedSgst > 0) {
       return printedCgst + printedSgst;
     }
-    final factor = itemsSubtotal > 0 ? (calculatedTaxableTotal / itemsSubtotal) : 1.0;
-    return items.fold(0.0, (sum, i) => sum + (i.gstAmount * factor));
+    return items.fold(0.0, (sum, item) {
+      if (item.gstPercent <= 0) return sum;
+      double effectiveTaxable = item.baseTaxableAmount * (1.0 - (billDiscountPercent / 100));
+      return sum + (effectiveTaxable * (item.gstPercent / 100));
+    });
   }
+
+  double get cgst => calculatedGstTotal / 2;
+  double get sgst => calculatedGstTotal / 2;
+
+  double get rawGrandTotal => netTaxableTotal + calculatedGstTotal;
 
   double get calculatedGrandTotal {
     if (grandTotal > 0) return grandTotal;
-    return calculatedTaxableTotal + calculatedGstTotal;
+    return rawGrandTotal.roundToDouble();
   }
 
   double get roundOff {
     if (printedRoundOff != 0.0) return printedRoundOff;
     if (grandTotal > 0) {
-      return grandTotal - (calculatedTaxableTotal + calculatedGstTotal);
+      return double.parse((grandTotal - rawGrandTotal).toStringAsFixed(2));
     }
-    return 0.0;
+    return double.parse((calculatedGrandTotal - rawGrandTotal).toStringAsFixed(2));
   }
 
   factory ScannedBillModel.fromJson(Map<String, dynamic> json) {
