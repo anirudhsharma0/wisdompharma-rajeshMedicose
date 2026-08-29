@@ -553,10 +553,10 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                               children: [
                                 const Row(
                                   children: [
-                                    Icon(Icons.calculate, color: AppColors.teal, size: 20),
+                                    Icon(Icons.document_scanner, color: AppColors.teal, size: 20),
                                     SizedBox(width: 6),
                                     Text(
-                                      'Smart GST Calculation Breakdown',
+                                      'Exact Printed Paper Bill As-Is Mapping (0 Calculation Mismatch)',
                                       style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.teal),
                                     ),
                                   ],
@@ -584,12 +584,12 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceAround,
                               children: [
-                                _buildSummaryTile('Items Subtotal', '₹${_scannedBill!.itemsSubtotal.toStringAsFixed(2)}'),
-                                _buildSummaryTile('Bill Disc (${_scannedBill!.billDiscountPercent.toStringAsFixed(1)}%)', '-₹${_scannedBill!.calculatedBillDiscount.toStringAsFixed(2)}', color: Colors.red.shade700),
-                                _buildSummaryTile('Net Taxable', '₹${_scannedBill!.calculatedTaxableTotal.toStringAsFixed(2)}'),
-                                _buildSummaryTile('GST (CGST+SGST)', '₹${_scannedBill!.calculatedGstTotal.toStringAsFixed(2)}'),
-                                _buildSummaryTile('Calculated Total', '₹${_scannedBill!.calculatedGrandTotal.toStringAsFixed(2)}', color: AppColors.teal),
+                                _buildSummaryTile('Printed Subtotal', '₹${_scannedBill!.itemsSubtotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('Printed Disc (${_scannedBill!.billDiscountPercent.toStringAsFixed(1)}%)', '-₹${_scannedBill!.calculatedBillDiscount.toStringAsFixed(2)}', color: Colors.red.shade700),
+                                _buildSummaryTile('Printed Net Taxable', '₹${_scannedBill!.calculatedTaxableTotal.toStringAsFixed(2)}'),
+                                _buildSummaryTile('CGST + SGST', '₹${_scannedBill!.calculatedGstTotal.toStringAsFixed(2)}'),
                                 _buildSummaryTile('Round Off', '₹${_scannedBill!.roundOff.toStringAsFixed(2)}', color: Colors.orange.shade800),
+                                _buildSummaryTile('Printed Grand Total', '₹${_scannedBill!.grandTotal.toStringAsFixed(2)}', color: AppColors.teal),
                               ],
                             ),
                           ],

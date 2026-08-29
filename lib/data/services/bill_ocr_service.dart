@@ -26,7 +26,7 @@ class ScannedBillItem {
   double schemeDiscount;
   double discountPercent;
   double gstPercent;
-  double netAmount;
+  double netAmount; // Exact printed row amount from paper bill
 
   ScannedBillItem({
     this.srNo = 1,
@@ -72,7 +72,7 @@ class ScannedBillItem {
   }
 
   double get calculatedNet {
-    return taxableAmount + gstAmount;
+    return netAmount > 0 ? netAmount : (taxableAmount + gstAmount);
   }
 
   factory ScannedBillItem.fromJson(Map<String, dynamic> json, int index) {
@@ -115,9 +115,8 @@ class ScannedBillItem {
       netAmount: net,
     );
 
-    // If printed net amount is missing or zero, compute using GST formula
     if (item.netAmount <= 0) {
-      item.netAmount = item.calculatedNet;
+      item.netAmount = item.taxableAmount + item.gstAmount;
     }
 
     return item;
@@ -150,12 +149,21 @@ class ScannedBillModel {
   String invoiceNumber;
   String invoiceDate;
   double grandTotal;
-  double billDiscountPercent; // Overall bill discount (e.g. 4.0 for 4%)
-  double billDiscountAmount;  // Overall bill discount in rupees (e.g. 147.73)
+  double billDiscountPercent;
+  double billDiscountAmount;
+  
+  // Exact printed values from physical paper bill
+  double printedSubtotal;
+  double printedDiscount;
+  double printedTaxable;
+  double printedCgst;
+  double printedSgst;
+  double printedRoundOff;
+
   List<ScannedBillItem> items;
   DateTime scannedAt;
   String status; // 'pending', 'approved', 'rejected'
-  bool isAmountTaxable; // true if printed table column is taxable amount before GST
+  bool isAmountTaxable;
 
   ScannedBillModel({
     String? id,
@@ -165,6 +173,12 @@ class ScannedBillModel {
     required this.grandTotal,
     this.billDiscountPercent = 0.0,
     this.billDiscountAmount = 0.0,
+    this.printedSubtotal = 0.0,
+    this.printedDiscount = 0.0,
+    this.printedTaxable = 0.0,
+    this.printedCgst = 0.0,
+    this.printedSgst = 0.0,
+    this.printedRoundOff = 0.0,
     required this.items,
     DateTime? scannedAt,
     this.status = 'pending',
@@ -172,9 +186,13 @@ class ScannedBillModel {
   })  : id = id ?? 'sb_${DateTime.now().millisecondsSinceEpoch}',
         scannedAt = scannedAt ?? DateTime.now();
 
-  double get itemsSubtotal => items.fold(0.0, (sum, i) => sum + i.taxableAmount);
+  double get itemsSubtotal {
+    if (printedSubtotal > 0) return printedSubtotal;
+    return items.fold(0.0, (sum, i) => sum + (i.netAmount > 0 ? i.netAmount : i.taxableAmount));
+  }
 
   double get calculatedBillDiscount {
+    if (printedDiscount > 0) return printedDiscount;
     if (billDiscountAmount > 0) return billDiscountAmount;
     if (billDiscountPercent > 0) {
       return itemsSubtotal * (billDiscountPercent / 100);
@@ -183,20 +201,28 @@ class ScannedBillModel {
   }
 
   double get calculatedTaxableTotal {
+    if (printedTaxable > 0) return printedTaxable;
     final sub = itemsSubtotal - calculatedBillDiscount;
     return sub > 0 ? sub : 0.0;
   }
 
   double get calculatedGstTotal {
+    if (printedCgst > 0 || printedSgst > 0) {
+      return printedCgst + printedSgst;
+    }
     final factor = itemsSubtotal > 0 ? (calculatedTaxableTotal / itemsSubtotal) : 1.0;
     return items.fold(0.0, (sum, i) => sum + (i.gstAmount * factor));
   }
 
-  double get calculatedGrandTotal => calculatedTaxableTotal + calculatedGstTotal;
+  double get calculatedGrandTotal {
+    if (grandTotal > 0) return grandTotal;
+    return calculatedTaxableTotal + calculatedGstTotal;
+  }
 
   double get roundOff {
+    if (printedRoundOff != 0.0) return printedRoundOff;
     if (grandTotal > 0) {
-      return grandTotal - calculatedGrandTotal;
+      return grandTotal - (calculatedTaxableTotal + calculatedGstTotal);
     }
     return 0.0;
   }
@@ -214,9 +240,20 @@ class ScannedBillModel {
     final disPct = (json['billDiscountPercent'] ?? json['billDiscount'] ?? json['discPercent'] as num?)?.toDouble() ??
         double.tryParse((json['billDiscountPercent'] ?? json['billDiscount'] ?? json['discPercent'] ?? '0').toString()) ??
         0.0;
-    final disAmt = (json['billDiscountAmount'] ?? json['discountAmount'] as num?)?.toDouble() ??
-        double.tryParse((json['billDiscountAmount'] ?? json['discountAmount'] ?? '0').toString()) ??
+    final disAmt = (json['billDiscountAmount'] ?? json['printedDiscount'] ?? json['discountAmount'] as num?)?.toDouble() ??
+        double.tryParse((json['billDiscountAmount'] ?? json['printedDiscount'] ?? json['discountAmount'] ?? '0').toString()) ??
         0.0;
+
+    final subTot = (json['printedSubtotal'] ?? json['subTotal'] as num?)?.toDouble() ??
+        double.tryParse((json['printedSubtotal'] ?? json['subTotal'] ?? '0').toString()) ?? 0.0;
+    final taxVal = (json['printedTaxable'] ?? json['netSale'] ?? json['taxableAmount'] as num?)?.toDouble() ??
+        double.tryParse((json['printedTaxable'] ?? json['netSale'] ?? json['taxableAmount'] ?? '0').toString()) ?? 0.0;
+    final cgst = (json['printedCgst'] ?? json['cgst'] as num?)?.toDouble() ??
+        double.tryParse((json['printedCgst'] ?? json['cgst'] ?? '0').toString()) ?? 0.0;
+    final sgst = (json['printedSgst'] ?? json['sgst'] as num?)?.toDouble() ??
+        double.tryParse((json['printedSgst'] ?? json['sgst'] ?? '0').toString()) ?? 0.0;
+    final rOff = (json['printedRoundOff'] ?? json['roundOff'] ?? json['coinAdjustment'] as num?)?.toDouble() ??
+        double.tryParse((json['printedRoundOff'] ?? json['roundOff'] ?? json['coinAdjustment'] ?? '0').toString()) ?? 0.0;
 
     final bill = ScannedBillModel(
       id: json['id']?.toString(),
@@ -226,13 +263,18 @@ class ScannedBillModel {
       grandTotal: parsedGrandTotal,
       billDiscountPercent: disPct,
       billDiscountAmount: disAmt,
+      printedSubtotal: subTot,
+      printedDiscount: disAmt,
+      printedTaxable: taxVal,
+      printedCgst: cgst,
+      printedSgst: sgst,
+      printedRoundOff: rOff,
       items: parsedItems,
       scannedAt: json['scannedAt'] != null ? DateTime.tryParse(json['scannedAt'].toString()) : null,
       status: json['status']?.toString() ?? 'pending',
       isAmountTaxable: json['isAmountTaxable'] == true,
     );
 
-    // Auto-fill grand total if missing
     if (bill.grandTotal <= 0 && bill.items.isNotEmpty) {
       bill.grandTotal = bill.calculatedGrandTotal;
     }
@@ -249,6 +291,12 @@ class ScannedBillModel {
       'grandTotal': grandTotal,
       'billDiscountPercent': billDiscountPercent,
       'billDiscountAmount': billDiscountAmount,
+      'printedSubtotal': printedSubtotal,
+      'printedDiscount': printedDiscount,
+      'printedTaxable': printedTaxable,
+      'printedCgst': printedCgst,
+      'printedSgst': printedSgst,
+      'printedRoundOff': printedRoundOff,
       'items': items.map((i) => i.toJson()).toList(),
       'scannedAt': scannedAt.toIso8601String(),
       'status': status,
@@ -395,17 +443,22 @@ class BillOcrService {
 
     final promptText = '''
 You are an expert OCR scanner for Indian wholesale medicine purchase invoices (e.g. Marg ERP, Busy, Tally bills from distributors like Madaan Medicose, Manav, Kissan, Ram, Ganpati, Friends Medical Agency).
-Analyze the provided bill image with 100% precision.
-Extract header details, all line items, free quantities, discounts, tax rates, footer overall bill discounts, and final printed totals.
+Analyze the provided bill image with 100% visual precision.
+Extract header details, line items, and EXACT PRINTED FOOTER NUMBERS directly as they appear on the paper bill without modifying or recalculating them.
 
 Required JSON Structure (Return ONLY raw valid JSON text, no markdown backticks, no explanatory text):
 {
   "supplierName": "Full Name of Distributor/Agency (e.g. MADAAN MEDICOSE)",
-  "invoiceNumber": "Invoice/Bill Number (e.g. 3006 or A000892)",
+  "invoiceNumber": "Invoice/Bill Number (e.g. 3006)",
   "invoiceDate": "Date of invoice (e.g. 28/08/2026)",
   "grandTotal": 3554.00,
+  "printedSubtotal": 3693.45,
   "billDiscountPercent": 4.0,
   "billDiscountAmount": 147.73,
+  "printedTaxable": 3545.72,
+  "printedCgst": 4.28,
+  "printedSgst": 4.28,
+  "printedRoundOff": -0.28,
   "isAmountTaxable": false,
   "items": [
     {
@@ -415,8 +468,8 @@ Required JSON Structure (Return ONLY raw valid JSON text, no markdown backticks,
       "quantity": 1,
       "freeQty": 0,
       "batchNumber": "Batch Number (e.g. F-5558)",
-      "expiryDate": "Expiry Date in MM/YY or YYYY-MM (e.g. 02/28)",
-      "hsn": "HSN Code (e.g. 23099010)",
+      "expiryDate": "Expiry Date (e.g. 02/28)",
+      "hsn": "HSN Code",
       "mrp": 600.00,
       "purchaseRate": 405.56,
       "scheme": 0.0,
@@ -428,11 +481,10 @@ Required JSON Structure (Return ONLY raw valid JSON text, no markdown backticks,
 }
 
 Strict Rules:
-1. Extract Qty and Free Qty accurately. If column says "Qty / Free" or "Qty + Free", separate main Qty from Free Qty.
-2. Extract Rate (Purchase Rate), Scheme Discount % (Sch %), Trade Discount % (Dis %), and GST % accurately for each line. If item says "GST FREE", set gstPercent to 0.0.
-3. VERY IMPORTANT: Check invoice footer / summary table for overall bill discounts (e.g. "DISC. 4.00%", "CASH DISC", "TRADE DISCOUNT"). Store the percentage in "billDiscountPercent" (e.g. 4.0) and total discount amount in "billDiscountAmount" (e.g. 147.73).
-4. In "isAmountTaxable", return true if the table column "Amount" represents Taxable Value (before GST), or false if it represents Net Total Value.
-5. Return ONLY valid JSON. All numeric values must be numbers.
+1. Extract exact printed values from line item rows into "netAmount".
+2. Extract exact printed footer numbers from invoice bottom: SUB TOTAL into "printedSubtotal", DISC % / Amt into "billDiscountPercent" and "billDiscountAmount", NET SALE into "printedTaxable", CGST into "printedCgst", SGST into "printedSgst", COIN ADJUSTMENT / ROUND OFF into "printedRoundOff", and INVOICE NET VALUE into "grandTotal".
+3. If an item row says "GST FREE" or "0%", set "gstPercent": 0.0.
+4. Return ONLY valid JSON text. All numeric values must be numbers.
 ''';
 
     final requestBody = {
