@@ -772,6 +772,11 @@ class _PartiesScreenState extends State<PartiesScreen> {
         ? initialScannedBill.invoiceDate
         : DateFormat('dd/MM/yyyy').format(DateTime.now()),
   );
+  final billDiscCtrl = TextEditingController(
+    text: (initialScannedBill != null && initialScannedBill.billDiscountPercent > 0)
+        ? initialScannedBill.billDiscountPercent.toStringAsFixed(1)
+        : '0.0',
+  );
   final paidAmtCtrl = TextEditingController(text: '0.0');
   final rcptNoCtrl = TextEditingController();
   String selectedMode = 'Cash';
@@ -782,6 +787,15 @@ class _PartiesScreenState extends State<PartiesScreen> {
 
   if (initialScannedBill != null && initialScannedBill.items.isNotEmpty) {
     for (var item in initialScannedBill.items) {
+      double effectiveRate = item.purchaseRate;
+      if (item.quantity > 1 && item.purchaseRate > 0) {
+        if ((item.purchaseRate * item.quantity - item.netAmount).abs() > (item.netAmount * 0.4)) {
+          effectiveRate = item.purchaseRate / item.quantity;
+        } else if ((item.purchaseRate - item.netAmount).abs() < 1.0) {
+          effectiveRate = item.purchaseRate / item.quantity;
+        }
+      }
+
       itemRows.add({
         'name': TextEditingController(text: item.productName),
         'qty': TextEditingController(text: '${item.quantity}${item.freeQty > 0 ? " + ${item.freeQty}" : ""}'),
@@ -791,7 +805,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
         'hsn': TextEditingController(text: item.hsn.isNotEmpty ? item.hsn : '3004'),
         'omrp': TextEditingController(text: item.mrp > 0 ? item.mrp.toStringAsFixed(2) : ''),
         'mrp': TextEditingController(text: item.mrp > 0 ? item.mrp.toStringAsFixed(2) : ''),
-        'rate': TextEditingController(text: item.purchaseRate > 0 ? item.purchaseRate.toStringAsFixed(2) : ''),
+        'rate': TextEditingController(text: effectiveRate > 0 ? effectiveRate.toStringAsFixed(2) : ''),
         'sch': TextEditingController(text: item.schemeDiscount.toStringAsFixed(1)),
         'dis': TextEditingController(text: item.discountPercent.toStringAsFixed(1)),
         'gst': TextEditingController(text: item.gstPercent.toStringAsFixed(1)),
@@ -820,9 +834,12 @@ class _PartiesScreenState extends State<PartiesScreen> {
     context: context,
     builder: (ctx) => StatefulBuilder(
       builder: (context, setDialogState) {
+        double billDiscPercent = double.tryParse(billDiscCtrl.text) ?? 0.0;
         double totalSubTotal = 0.0;
         double totalDis = 0.0;
+        double totalTaxable = 0.0;
         double totalTax = 0.0;
+
         for (var row in itemRows) {
           final qStr = row['qty']!.text.split('+').first.trim();
           final q = double.tryParse(qStr) ?? 0.0;
@@ -831,20 +848,29 @@ class _PartiesScreenState extends State<PartiesScreen> {
           final dis = double.tryParse(row['dis']!.text) ?? 0.0;
           final gst = double.tryParse(row['gst']!.text) ?? 0.0;
 
-          final lineAmount = q * r;
-          final afterScheme = lineAmount * (1.0 - (sch / 100.0));
-          final schDisAmt = lineAmount * (sch / 100.0);
+          final lineGross = q * r;
+          final schDisAmt = lineGross * (sch / 100.0);
+          final afterScheme = lineGross - schDisAmt;
           final tradeDisAmt = afterScheme * (dis / 100.0);
-          final lineDis = schDisAmt + tradeDisAmt;
-          final netTaxable = lineAmount - lineDis;
-          final lineTax = netTaxable * (gst / 100.0);
+          final lineTaxable = afterScheme - tradeDisAmt;
 
-          totalSubTotal += lineAmount;
-          totalDis += lineDis;
-          totalTax += lineTax;
+          totalSubTotal += lineGross;
+          totalDis += (schDisAmt + tradeDisAmt);
+          totalTaxable += lineTaxable;
+
+          if (gst > 0) {
+            double effectiveTaxable = lineTaxable * (1.0 - (billDiscPercent / 100.0));
+            totalTax += effectiveTaxable * (gst / 100.0);
+          }
         }
-        final unroundedNet = totalSubTotal - totalDis + totalTax;
-        final totalBillAmount = unroundedNet.roundToDouble();
+
+        double billDiscAmount = totalTaxable * (billDiscPercent / 100.0);
+        double netTaxableTotal = totalTaxable - billDiscAmount;
+
+        double totalBillAmount = (initialScannedBill != null && initialScannedBill.grandTotal > 0 && billDiscPercent == initialScannedBill.billDiscountPercent)
+            ? initialScannedBill.grandTotal
+            : (netTaxableTotal + totalTax).roundToDouble();
+
         final paidAmt = double.tryParse(paidAmtCtrl.text) ?? 0.0;
         final netBalanceAdded = (totalBillAmount - paidAmt).clamp(0.0, 9999999.0);
 
@@ -878,7 +904,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 12),
                       Expanded(
                         child: TextField(
                           controller: invDateCtrl,
@@ -887,6 +913,19 @@ class _PartiesScreenState extends State<PartiesScreen> {
                             hintText: 'e.g. 30/07/2026',
                             prefixIcon: Icon(Icons.calendar_today, size: 18),
                           ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: billDiscCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'Bill Disc (%)',
+                            hintText: 'e.g. 4.0',
+                            prefixIcon: Icon(Icons.percent, size: 18),
+                          ),
+                          onChanged: (_) => setDialogState(() {}),
                         ),
                       ),
                     ],
