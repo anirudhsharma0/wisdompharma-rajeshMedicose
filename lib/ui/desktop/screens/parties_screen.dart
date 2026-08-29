@@ -2058,26 +2058,60 @@ class _PartiesScreenState extends State<PartiesScreen> {
         }
 
         subTotal = calcSubTotal;
-        totalDis = calcTotalDis;
-        gst5Taxable = calcGst5Taxable;
-        gst5Tax = calcGst5Tax;
-        gst12Taxable = calcGst12Taxable;
-        gst12Tax = calcGst12Tax;
-        gst18Taxable = calcGst18Taxable;
-        gst18Tax = calcGst18Tax;
-        totalTax = calcGst5Tax + calcGst12Tax + calcGst18Tax;
-        totalTaxable = calcGst5Taxable + calcGst12Taxable + calcGst18Taxable;
 
-        final unroundedNet = subTotal - totalDis + totalTax;
-        currBill = unroundedNet.roundToDouble();
-        roundOff = currBill - unroundedNet;
+        double calcSchDis = 0.0;
+        for (var it in items) {
+          final q = (it['qty'] as num?)?.toInt() ?? 1;
+          final r = (it['rate'] as num?)?.toDouble() ?? 0.0;
+          final sch = (it['sch'] as num?)?.toDouble() ?? 0.0;
+          calcSchDis += (q * r) * (sch / 100.0);
+        }
+
+        totalDis = calcSchDis > 0 ? calcSchDis : calcTotalDis;
+
+        double netBase = (subTotal - totalDis).clamp(0.0, 9999999.0);
+        totalTaxable = netBase;
+
+        double finalGst5Tax = 0.0, finalGst12Tax = 0.0, finalGst18Tax = 0.0;
+        for (var it in items) {
+          final q = (it['qty'] as num?)?.toInt() ?? 1;
+          final r = (it['rate'] as num?)?.toDouble() ?? 0.0;
+          final sch = (it['sch'] as num?)?.toDouble() ?? 0.0;
+          final g = (it['gst'] as num?)?.toDouble() ?? 0.0;
+
+          final grossLine = q * r;
+          final afterSch = grossLine * (1.0 - (sch / 100.0));
+
+          if (g == 5.0) {
+            gst5Taxable += afterSch;
+            finalGst5Tax += afterSch * 0.05;
+          } else if (g == 12.0) {
+            gst12Taxable += afterSch;
+            finalGst12Tax += afterSch * 0.12;
+          } else if (g == 18.0) {
+            gst18Taxable += afterSch;
+            finalGst18Tax += afterSch * 0.18;
+          }
+        }
+
+        gst5Tax = finalGst5Tax;
+        gst12Tax = finalGst12Tax;
+        gst18Tax = finalGst18Tax;
+        totalTax = gst5Tax + gst12Tax + gst18Tax;
+
+        if (transaction.totalAmount > 0) {
+          currBill = transaction.totalAmount;
+        } else {
+          currBill = (subTotal - totalDis + totalTax).roundToDouble();
+        }
+        roundOff = currBill - (subTotal - totalDis + totalTax);
       }
       totalItems = items.length;
       if (totalQty == 0) totalQty = 1;
     }
 
     double cgst = totalTax / 2.0;
-      double sgst = totalTax / 2.0;
+    double sgst = totalTax / 2.0;
     String displayPartyName = party.name;
     final agencyMatch = RegExp(r'Agency:\s*([^,\n\(\)]+)', caseSensitive: false).firstMatch(transaction.remarks ?? '');
     if (agencyMatch != null && agencyMatch.group(1) != null && agencyMatch.group(1)!.trim().isNotEmpty) {
