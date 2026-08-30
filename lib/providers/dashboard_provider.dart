@@ -410,6 +410,7 @@ class DashboardProvider extends ChangeNotifier {
     _suppliersSubscription?.cancel();
     _paymentsSubscription?.cancel();
     _vouchersSubscription?.cancel();
+    _purchaseBillsSubscription?.cancel();
     super.dispose();
   }
 

@@ -5,7 +5,6 @@ import '../../../core/constants/colors.dart';
 import '../../../providers/dashboard_provider.dart';
 import '../../../data/models/supplier_model.dart';
 import '../../../data/models/purchase_bill_model.dart';
-import '../../../data/models/inventory_model.dart';
 import '../../../data/models/medicine_master_model.dart';
 import '../../../data/services/sqlite_service.dart';
 import '../../../data/services/pdf_service.dart';
@@ -185,9 +184,6 @@ class PurchaseScreen extends StatefulWidget {
 
 class _PurchaseScreenState extends State<PurchaseScreen> {
   String _searchQuery = '';
-
-  // Local list of purchase bills recorded
-  final List<Map<String, dynamic>> _purchaseBills = [];
 
   void _showNewPurchaseBillDialog(BuildContext context, DashboardProvider provider) {
     String selectedSupplierName = provider.suppliers.isNotEmpty ? provider.suppliers.first.name : '';

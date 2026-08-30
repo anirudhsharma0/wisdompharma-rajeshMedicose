@@ -15,6 +15,14 @@ class PurchaseBillModel {
   final List<Map<String, dynamic>> items;
   final DateTime createdAt;
 
+  // Exact scanned footer breakdown values (As-Is Paper Data)
+  final double itemsSubtotal;
+  final double billDiscountAmount;
+  final double netTaxableAmount;
+  final double totalCGST;
+  final double totalSGST;
+  final double roundOff;
+
   PurchaseBillModel({
     this.id,
     required this.billNumber,
@@ -29,6 +37,12 @@ class PurchaseBillModel {
     this.receiptNo = '',
     required this.items,
     required this.createdAt,
+    this.itemsSubtotal = 0.0,
+    this.billDiscountAmount = 0.0,
+    this.netTaxableAmount = 0.0,
+    this.totalCGST = 0.0,
+    this.totalSGST = 0.0,
+    this.roundOff = 0.0,
   });
 
   factory PurchaseBillModel.fromMap(Map<String, dynamic> map, String id) {
@@ -71,6 +85,12 @@ class PurchaseBillModel {
       receiptNo: map['receiptNo'] ?? '',
       items: parsedItems,
       createdAt: cDate,
+      itemsSubtotal: (map['itemsSubtotal'] as num?)?.toDouble() ?? 0.0,
+      billDiscountAmount: (map['billDiscountAmount'] as num?)?.toDouble() ?? 0.0,
+      netTaxableAmount: (map['netTaxableAmount'] as num?)?.toDouble() ?? 0.0,
+      totalCGST: (map['totalCGST'] as num?)?.toDouble() ?? 0.0,
+      totalSGST: (map['totalSGST'] as num?)?.toDouble() ?? 0.0,
+      roundOff: (map['roundOff'] as num?)?.toDouble() ?? 0.0,
     );
   }
 
@@ -88,6 +108,12 @@ class PurchaseBillModel {
       'receiptNo': receiptNo,
       'items': items,
       'createdAt': Timestamp.fromDate(createdAt),
+      'itemsSubtotal': itemsSubtotal,
+      'billDiscountAmount': billDiscountAmount,
+      'netTaxableAmount': netTaxableAmount,
+      'totalCGST': totalCGST,
+      'totalSGST': totalSGST,
+      'roundOff': roundOff,
     };
   }
 }

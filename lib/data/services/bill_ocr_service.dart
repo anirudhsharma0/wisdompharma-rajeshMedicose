@@ -191,7 +191,7 @@ class ScannedBillModel {
 
   double get subTotal {
     if (printedSubtotal > 0) return printedSubtotal;
-    return items.fold(0.0, (sum, i) => sum + i.baseTaxableAmount);
+    return items.fold(0.0, (acc, i) => acc + i.baseTaxableAmount);
   }
 
   double get itemsSubtotal => subTotal;
@@ -217,15 +217,19 @@ class ScannedBillModel {
     if (printedCgst > 0 || printedSgst > 0) {
       return printedCgst + printedSgst;
     }
-    return items.fold(0.0, (sum, item) {
-      if (item.gstPercent <= 0) return sum;
+    return items.fold(0.0, (acc, item) {
+      if (item.gstPercent <= 0) return acc;
       double effectiveTaxable = item.baseTaxableAmount * (1.0 - (billDiscountPercent / 100));
-      return sum + (effectiveTaxable * (item.gstPercent / 100));
+      return acc + (effectiveTaxable * (item.gstPercent / 100));
     });
   }
 
-  double get cgst => calculatedGstTotal / 2;
-  double get sgst => calculatedGstTotal / 2;
+  double get netTaxableAmount => netTaxableTotal;
+  double get totalCGST => printedCgst > 0 ? printedCgst : cgst;
+  double get totalSGST => printedSgst > 0 ? printedSgst : sgst;
+
+  double get cgst => (printedCgst > 0) ? printedCgst : (calculatedGstTotal / 2);
+  double get sgst => (printedSgst > 0) ? printedSgst : (calculatedGstTotal / 2);
 
   double get rawGrandTotal => netTaxableTotal + calculatedGstTotal;
 
@@ -448,6 +452,154 @@ class BillOcrService {
     return 'image/jpeg';
   }
 
+  /// Send multi-page bill images (Page 1, Page 2, etc.) to Gemini API and parse into a single unified ScannedBillModel
+  Future<ScannedBillModel> scanMultiPageBill(List<Uint8List> imagesBytesList) async {
+    if (imagesBytesList.isEmpty) {
+      throw Exception('No bill image provided.');
+    }
+    if (imagesBytesList.length == 1) {
+      return scanBillImage(imagesBytesList.first);
+    }
+
+    final apiKey = (await getApiKey()).trim();
+    debugPrint('Scanning multi-page bill: ${imagesBytesList.length} pages attached.');
+
+    final promptText = '''
+You are an expert OCR scanner for Indian wholesale medicine purchase invoices (e.g. Marg ERP, Busy, Tally bills from distributors like Rise Pharmaceuticals, Madaan Medicose, Manav, Kissan, Ram, Ganpati, Friends Medical Agency).
+
+CRITICAL MULTI-PAGE INSTRUCTIONS:
+You are provided with ${imagesBytesList.length} image pages of the SAME purchase invoice (Page 1, Page 2, Page 3, etc.).
+Analyze ALL pages together in sequence and combine them into ONE single complete invoice JSON:
+
+1. Supplier Name, Invoice Number, and Invoice Date are usually printed on Page 1 (Top Header).
+2. COMBINE and MERGE ALL line item medicine rows across ALL pages into a single continuous "items" array in exact sequential order. Do NOT skip or miss any medicine item row from Page 1, Page 2, etc.
+3. Keep sequential "srNo" starting from 1, 2, 3... up to the total number of items across all pages.
+4. Extract the FINAL printed footer summary (printedSubtotal, printedDiscount, printedTaxable, printedCgst, printedSgst, printedRoundOff, grandTotal) from the last page or summary box at the end of the bill.
+
+Required JSON Structure (Return ONLY raw valid JSON text, no markdown backticks, no explanatory text):
+{
+  "supplierName": "Full Name of Distributor/Agency (e.g. RISE PHARMACEUTICALS)",
+  "invoiceNumber": "Invoice/Bill Number (e.g. A000937)",
+  "invoiceDate": "Date of invoice (e.g. 30-07-2026)",
+  "grandTotal": 4056.38,
+  "printedSubtotal": 4056.38,
+  "billDiscountPercent": 0.0,
+  "billDiscountAmount": 0.0,
+  "printedTaxable": 3863.22,
+  "printedCgst": 96.58,
+  "printedSgst": 96.58,
+  "printedRoundOff": 0.0,
+  "isAmountTaxable": false,
+  "items": [
+    {
+      "srNo": 1,
+      "productName": "AEROCORT R/C 60CAP",
+      "pack": "60CAP",
+      "quantity": 3,
+      "freeQty": 0,
+      "batchNumber": "6SA0447",
+      "expiryDate": "7/27",
+      "hsn": "3004",
+      "mrp": 142.67,
+      "purchaseRate": 108.71,
+      "scheme": 0.0,
+      "discountPercent": 0.0,
+      "gstPercent": 5.0,
+      "netAmount": 326.13
+    }
+  ]
+}
+
+Strict Rules:
+1. Extract exact printed values from line item rows into "netAmount".
+2. Extract exact printed footer numbers from invoice bottom.
+3. Return ONLY valid JSON text. All numeric values must be numbers.
+''';
+
+    final List<Map<String, dynamic>> parts = [
+      {"text": promptText}
+    ];
+
+    for (int i = 0; i < imagesBytesList.length; i++) {
+      final bytes = imagesBytesList[i];
+      final mimeType = _detectMimeType(bytes);
+      parts.add({
+        "inline_data": {
+          "mime_type": mimeType,
+          "data": base64Encode(bytes)
+        }
+      });
+    }
+
+    final requestBody = {
+      "contents": [
+        {
+          "parts": parts
+        }
+      ],
+      "generationConfig": {
+        "temperature": 0.1,
+        "maxOutputTokens": 8192,
+        "response_mime_type": "application/json"
+      }
+    };
+
+    final endpoints = [
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=$apiKey',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=$apiKey',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$apiKey',
+    ];
+
+    http.Response? response;
+    String? lastErrorDetails;
+
+    for (final endpoint in endpoints) {
+      final url = Uri.parse(endpoint);
+      try {
+        final res = await http.post(
+          url,
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey,
+          },
+          body: jsonEncode(requestBody),
+        ).timeout(const Duration(seconds: 45));
+        if (res.statusCode == 200) {
+          response = res;
+          debugPrint('Successfully scanned multi-page bill using Gemini endpoint: $endpoint');
+          break;
+        } else {
+          lastErrorDetails = '[Code ${res.statusCode}] ${res.body}';
+        }
+      } catch (e) {
+        lastErrorDetails = '[Exception: $e]';
+      }
+    }
+
+    if (response == null || response.statusCode != 200) {
+      debugPrint('All Gemini OCR endpoints failed: $lastErrorDetails');
+      throw Exception('Gemini API Error: $lastErrorDetails');
+    }
+
+    final responseJson = jsonDecode(response.body);
+    final candidates = responseJson['candidates'] as List?;
+    if (candidates == null || candidates.isEmpty) {
+      throw Exception('No response generated by Gemini AI Vision.');
+    }
+
+    final respParts = candidates[0]['content']['parts'] as List?;
+    if (respParts == null || respParts.isEmpty) {
+      throw Exception('Empty content returned by AI.');
+    }
+
+    String rawText = respParts[0]['text'] ?? '';
+    debugPrint('Gemini Raw OCR Output:\n$rawText');
+
+    final parsedMap = _parseOrRepairJson(rawText);
+    return ScannedBillModel.fromJson(parsedMap);
+  }
+
   /// Send bill image to Gemini API and parse into ScannedBillModel
   Future<ScannedBillModel> scanBillImage(Uint8List imageBytes, {String? mimeType}) async {
     final apiKey = (await getApiKey()).trim();
@@ -457,7 +609,7 @@ class BillOcrService {
     debugPrint('Scanning bill: image size=${imageBytes.length} bytes, detected mimeType=$effectiveMimeType');
 
     final promptText = '''
-You are an expert OCR scanner for Indian wholesale medicine purchase invoices (e.g. Marg ERP, Busy, Tally bills from distributors like Madaan Medicose, Manav, Kissan, Ram, Ganpati, Friends Medical Agency).
+You are an expert OCR scanner for Indian wholesale medicine purchase invoices (e.g. Marg ERP, Busy, Tally bills from distributors like Rise Pharmaceuticals, Madaan Medicose, Manav, Kissan, Ram, Ganpati, Friends Medical Agency).
 Analyze the provided bill image with 100% visual precision.
 Extract header details, line items, and EXACT PRINTED FOOTER NUMBERS directly as they appear on the paper bill without modifying or recalculating them.
 

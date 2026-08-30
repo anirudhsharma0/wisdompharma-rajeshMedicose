@@ -16,19 +16,23 @@ class BillScannerScreen extends StatefulWidget {
 }
 
 class _BillScannerScreenState extends State<BillScannerScreen> {
-  Uint8List? _selectedImageBytes;
-  // ignore: unused_field
-  String? _selectedImageName;
+  final List<Uint8List> _selectedPages = [];
   bool _isScanning = false;
   String _statusText = '';
   ScannedBillModel? _scannedBill;
 
-  // Header Controllers
+  // Header & Footer Controllers
   final _supplierController = TextEditingController();
   final _invoiceNoController = TextEditingController();
   final _invoiceDateController = TextEditingController();
   final _grandTotalController = TextEditingController();
   final _billDiscountController = TextEditingController();
+  final _subtotalController = TextEditingController();
+  final _printedDiscountController = TextEditingController();
+  final _taxableController = TextEditingController();
+  final _cgstController = TextEditingController();
+  final _sgstController = TextEditingController();
+  final _roundOffController = TextEditingController();
 
   final ImagePicker _picker = ImagePicker();
 
@@ -39,40 +43,64 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
     _invoiceDateController.dispose();
     _grandTotalController.dispose();
     _billDiscountController.dispose();
+    _subtotalController.dispose();
+    _printedDiscountController.dispose();
+    _taxableController.dispose();
+    _cgstController.dispose();
+    _sgstController.dispose();
+    _roundOffController.dispose();
     super.dispose();
   }
 
-  Future<void> _pickImage(ImageSource source) async {
+  Future<void> _pickImage(ImageSource source, {bool isAddNextPage = false}) async {
     try {
       final XFile? image = await _picker.pickImage(source: source, imageQuality: 90);
       if (image != null) {
         final bytes = await image.readAsBytes();
         setState(() {
-          _selectedImageBytes = bytes;
-          _selectedImageName = image.name;
+          if (!isAddNextPage) {
+            _selectedPages.clear();
+          }
+          _selectedPages.add(bytes);
         });
-        await _processImageScan(bytes);
+        if (isAddNextPage) {
+          _showSnackBar('Page ${_selectedPages.length} added! Click "Scan All Pages" when ready.');
+        } else {
+          await _processImageScan();
+        }
       }
     } catch (e) {
       _showSnackBar('Error selecting image: $e', isError: true);
     }
   }
 
-  Future<void> _pickFileFromDisk() async {
+  Future<void> _pickFileFromDisk({bool isAddNextPage = false}) async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['jpg', 'jpeg', 'png', 'webp'],
+        allowMultiple: true,
         withData: true,
       );
       if (result != null && result.files.isNotEmpty) {
-        final file = result.files.first;
-        if (file.bytes != null) {
+        final List<Uint8List> newBytes = [];
+        for (var file in result.files) {
+          if (file.bytes != null) {
+            newBytes.add(file.bytes!);
+          }
+        }
+        if (newBytes.isNotEmpty) {
           setState(() {
-            _selectedImageBytes = file.bytes;
-            _selectedImageName = file.name;
+            if (!isAddNextPage && _selectedPages.isNotEmpty) {
+              _selectedPages.clear();
+            }
+            _selectedPages.addAll(newBytes);
           });
-          await _processImageScan(file.bytes!);
+          if (isAddNextPage) {
+            _showSnackBar('${newBytes.length} page(s) added! Total: ${_selectedPages.length} pages.');
+          } else {
+            await _processImageScan();
+          }
         }
       }
     } catch (e) {
@@ -80,25 +108,51 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
     }
   }
 
-  Future<void> _processImageScan(Uint8List bytes) async {
+  void _removePage(int index) {
+    if (index >= 0 && index < _selectedPages.length) {
+      setState(() {
+        _selectedPages.removeAt(index);
+      });
+      _showSnackBar('Page removed. Remaining: ${_selectedPages.length} page(s).');
+    }
+  }
+
+  void _clearAllPages() {
+    setState(() {
+      _selectedPages.clear();
+      _scannedBill = null;
+    });
+  }
+
+  Future<void> _processImageScan() async {
+    if (_selectedPages.isEmpty) return;
+
     setState(() {
       _isScanning = true;
-      _statusText = 'AI Analyzing Purchase Bill (Gemini AI)...';
+      _statusText = _selectedPages.length > 1
+          ? 'AI Analyzing ${_selectedPages.length}-Page Purchase Bill (Gemini AI)...'
+          : 'AI Analyzing Purchase Bill (Gemini AI)...';
     });
 
     try {
-      final scannedBill = await BillOcrService.instance.scanBillImage(bytes);
+      final scannedBill = await BillOcrService.instance.scanMultiPageBill(_selectedPages);
       setState(() {
         _scannedBill = scannedBill;
         _supplierController.text = scannedBill.supplierName;
         _invoiceNoController.text = scannedBill.invoiceNumber;
         _invoiceDateController.text = scannedBill.invoiceDate;
-        _grandTotalController.text = scannedBill.grandTotal.toStringAsFixed(2);
+        _grandTotalController.text = scannedBill.grandTotal > 0 ? scannedBill.grandTotal.toStringAsFixed(2) : scannedBill.calculatedGrandTotal.toStringAsFixed(2);
         _billDiscountController.text = scannedBill.billDiscountPercent.toStringAsFixed(2);
+        _subtotalController.text = scannedBill.printedSubtotal > 0 ? scannedBill.printedSubtotal.toStringAsFixed(2) : scannedBill.subTotal.toStringAsFixed(2);
+        _printedDiscountController.text = scannedBill.printedDiscount > 0 ? scannedBill.printedDiscount.toStringAsFixed(2) : scannedBill.calculatedBillDiscount.toStringAsFixed(2);
+        _taxableController.text = scannedBill.printedTaxable > 0 ? scannedBill.printedTaxable.toStringAsFixed(2) : scannedBill.netTaxableTotal.toStringAsFixed(2);
+        _cgstController.text = scannedBill.printedCgst > 0 ? scannedBill.printedCgst.toStringAsFixed(2) : scannedBill.cgst.toStringAsFixed(2);
+        _sgstController.text = scannedBill.printedSgst > 0 ? scannedBill.printedSgst.toStringAsFixed(2) : scannedBill.sgst.toStringAsFixed(2);
+        _roundOffController.text = scannedBill.printedRoundOff.toStringAsFixed(2);
         _isScanning = false;
-        _statusText = 'Scan Complete! ${scannedBill.items.length} items extracted.';
+        _statusText = 'Scan Complete! ${scannedBill.items.length} items extracted from ${_selectedPages.length} page(s).';
       });
-      _showSnackBar('Successfully scanned ${scannedBill.items.length} items from bill!');
+      _showSnackBar('Successfully scanned ${scannedBill.items.length} items from ${_selectedPages.length} page(s)!');
     } catch (e) {
       debugPrint('AI Scan Error: $e');
       final fallbackBill = ScannedBillModel(
@@ -127,6 +181,12 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
         _invoiceNoController.text = fallbackBill.invoiceNumber;
         _invoiceDateController.text = fallbackBill.invoiceDate;
         _grandTotalController.text = fallbackBill.grandTotal.toStringAsFixed(2);
+        _subtotalController.text = '0.00';
+        _printedDiscountController.text = '0.00';
+        _taxableController.text = '0.00';
+        _cgstController.text = '0.00';
+        _sgstController.text = '0.00';
+        _roundOffController.text = '0.00';
         _isScanning = false;
         _statusText = 'Scan Failed: $errorStr';
       });
@@ -372,13 +432,33 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Scan Physical Purchase Bill / Photo',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate800),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.document_scanner_outlined, color: AppColors.teal, size: 24),
+                            SizedBox(width: 8),
+                            Text(
+                              'Scan Physical Purchase Bill / Photo',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate800),
+                            ),
+                          ],
+                        ),
+                        if (_selectedPages.isNotEmpty)
+                          Chip(
+                            avatar: const Icon(Icons.pages, size: 16, color: Colors.white),
+                            label: Text(
+                              '${_selectedPages.length} Page${_selectedPages.length > 1 ? "s" : ""} Selected',
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                            backgroundColor: AppColors.teal,
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 6),
                     const Text(
-                      'Click a photo or select an image of your distributor purchase bill. AI will extract all table rows & columns automatically into Excel and Stock!',
+                      'Click photo or select images of your purchase bill. Supports 1-page & MULTI-PAGE (2 or more pages) bills! AI will combine all pages into 1 single Excel sheet & Purchase record.',
                       style: TextStyle(fontSize: 13, color: Colors.grey),
                     ),
                     const SizedBox(height: 16),
@@ -387,9 +467,9 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                       runSpacing: 10,
                       children: [
                         ElevatedButton.icon(
-                          onPressed: () => _pickImage(ImageSource.camera),
+                          onPressed: () => _pickImage(ImageSource.camera, isAddNextPage: false),
                           icon: const Icon(Icons.camera_alt),
-                          label: const Text('Take Photo'),
+                          label: Text(_selectedPages.isEmpty ? 'Take Photo' : 'New Single Bill Photo'),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.teal,
                             foregroundColor: Colors.white,
@@ -397,13 +477,35 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                           ),
                         ),
                         OutlinedButton.icon(
-                          onPressed: _pickFileFromDisk,
+                          onPressed: () => _pickFileFromDisk(isAddNextPage: false),
                           icon: const Icon(Icons.photo_library),
-                          label: const Text('Upload Image / File'),
+                          label: const Text('Upload Images / Files'),
                           style: OutlinedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                           ),
                         ),
+                        if (_selectedPages.isNotEmpty) ...[
+                          ElevatedButton.icon(
+                            onPressed: () => _pickImage(ImageSource.camera, isAddNextPage: true),
+                            icon: const Icon(Icons.add_a_photo),
+                            label: Text('+ Add Page ${_selectedPages.length + 1} (Camera)'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.indigo,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: () => _pickFileFromDisk(isAddNextPage: true),
+                            icon: const Icon(Icons.note_add),
+                            label: const Text('+ Add Next Page (File)'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.indigo,
+                              side: const BorderSide(color: Colors.indigo),
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ],
@@ -434,19 +536,100 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                 ),
               ),
 
-            if (_selectedImageBytes != null && !_isScanning)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 16),
-                child: Container(
-                  height: 160,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey.shade300),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.memory(_selectedImageBytes!, fit: BoxFit.contain),
+            // Multi-Page Thumbnails Preview Strip
+            if (_selectedPages.isNotEmpty && !_isScanning)
+              Card(
+                elevation: 1,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Bill Pages Preview (${_selectedPages.length} Attached)',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate800),
+                          ),
+                          Row(
+                            children: [
+                              TextButton.icon(
+                                icon: const Icon(Icons.refresh, size: 16),
+                                label: Text('Scan All (${_selectedPages.length}) Pages'),
+                                style: TextButton.styleFrom(foregroundColor: AppColors.teal),
+                                onPressed: _processImageScan,
+                              ),
+                              TextButton.icon(
+                                icon: const Icon(Icons.clear_all, size: 16),
+                                label: const Text('Clear All'),
+                                style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                onPressed: _clearAllPages,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        height: 150,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: _selectedPages.length,
+                          separatorBuilder: (ctx, idx) => const SizedBox(width: 10),
+                          itemBuilder: (ctx, idx) {
+                            final bytes = _selectedPages[idx];
+                            return Stack(
+                              children: [
+                                Container(
+                                  width: 110,
+                                  height: 150,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.grey.shade300, width: 1.5),
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(7),
+                                    child: Image.memory(bytes, fit: BoxFit.cover),
+                                  ),
+                                ),
+                                Positioned(
+                                  top: 4,
+                                  left: 4,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black87,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      'Page ${idx + 1}',
+                                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ),
+                                Positioned(
+                                  top: 2,
+                                  right: 2,
+                                  child: GestureDetector(
+                                    onTap: () => _removePage(idx),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(4),
+                                      decoration: const BoxDecoration(
+                                        color: Colors.red,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: const Icon(Icons.close, color: Colors.white, size: 12),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -566,7 +749,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                     const Text('Taxable Table Column', style: TextStyle(fontSize: 12)),
                                     Switch(
                                       value: _scannedBill!.isAmountTaxable,
-                                      activeColor: AppColors.teal,
+                                      activeThumbColor: AppColors.teal,
                                       onChanged: (val) {
                                         setState(() {
                                           _scannedBill!.isAmountTaxable = val;
@@ -582,15 +765,76 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                             ),
                             const Divider(),
                             Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceAround,
                               children: [
-                                _buildSummaryTile('Items Subtotal', '₹${_scannedBill!.subTotal.toStringAsFixed(2)}'),
-                                _buildSummaryTile('Bill Disc (${_scannedBill!.billDiscountPercent.toStringAsFixed(1)}%)', '-₹${_scannedBill!.calculatedBillDiscount.toStringAsFixed(2)}', color: Colors.red.shade700),
-                                _buildSummaryTile('Net Taxable', '₹${_scannedBill!.netTaxableTotal.toStringAsFixed(2)}'),
-                                _buildSummaryTile('CGST (50%)', '₹${_scannedBill!.cgst.toStringAsFixed(2)}'),
-                                _buildSummaryTile('SGST (50%)', '₹${_scannedBill!.sgst.toStringAsFixed(2)}'),
-                                _buildSummaryTile('Round Off', '₹${_scannedBill!.roundOff.toStringAsFixed(2)}', color: Colors.orange.shade800),
-                                _buildSummaryTile('Payable Grand Total', '₹${_scannedBill!.calculatedGrandTotal.toStringAsFixed(2)}', color: AppColors.teal),
+                                _buildEditableSummaryField(
+                                  label: 'Subtotal (₹)',
+                                  controller: _subtotalController,
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _scannedBill!.printedSubtotal = double.tryParse(val) ?? 0.0;
+                                    });
+                                  },
+                                ),
+                                _buildEditableSummaryField(
+                                  label: 'Bill Disc (₹)',
+                                  controller: _printedDiscountController,
+                                  color: Colors.red.shade700,
+                                  onChanged: (val) {
+                                    setState(() {
+                                      final dis = double.tryParse(val) ?? 0.0;
+                                      _scannedBill!.printedDiscount = dis;
+                                      _scannedBill!.billDiscountAmount = dis;
+                                    });
+                                  },
+                                ),
+                                _buildEditableSummaryField(
+                                  label: 'Net Taxable (₹)',
+                                  controller: _taxableController,
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _scannedBill!.printedTaxable = double.tryParse(val) ?? 0.0;
+                                    });
+                                  },
+                                ),
+                                _buildEditableSummaryField(
+                                  label: 'CGST (₹)',
+                                  controller: _cgstController,
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _scannedBill!.printedCgst = double.tryParse(val) ?? 0.0;
+                                    });
+                                  },
+                                ),
+                                _buildEditableSummaryField(
+                                  label: 'SGST (₹)',
+                                  controller: _sgstController,
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _scannedBill!.printedSgst = double.tryParse(val) ?? 0.0;
+                                    });
+                                  },
+                                ),
+                                _buildEditableSummaryField(
+                                  label: 'Round Off (₹)',
+                                  controller: _roundOffController,
+                                  color: Colors.orange.shade800,
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _scannedBill!.printedRoundOff = double.tryParse(val) ?? 0.0;
+                                    });
+                                  },
+                                ),
+                                _buildEditableSummaryField(
+                                  label: 'Grand Total (₹)',
+                                  controller: _grandTotalController,
+                                  color: AppColors.teal,
+                                  onChanged: (val) {
+                                    setState(() {
+                                      final gt = double.tryParse(val) ?? 0.0;
+                                      _scannedBill!.grandTotal = gt;
+                                    });
+                                  },
+                                ),
                               ],
                             ),
                           ],
@@ -643,7 +887,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                       SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: DataTable(
-                          columnSpacing: 16,
+                          columnSpacing: 22,
                           headingRowColor: WidgetStateProperty.all(Colors.teal.shade50),
                           columns: const [
                             DataColumn(label: Text('Sn', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -651,6 +895,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                             DataColumn(label: Text('Pack', style: TextStyle(fontWeight: FontWeight.bold))),
                             DataColumn(label: Text('Batch', style: TextStyle(fontWeight: FontWeight.bold))),
                             DataColumn(label: Text('Exp.', style: TextStyle(fontWeight: FontWeight.bold))),
+                            DataColumn(label: Text('HSN', style: TextStyle(fontWeight: FontWeight.bold))),
                             DataColumn(label: Text('Qty', style: TextStyle(fontWeight: FontWeight.bold))),
                             DataColumn(label: Text('Free', style: TextStyle(fontWeight: FontWeight.bold))),
                             DataColumn(label: Text('MRP (₹)', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -669,7 +914,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 DataCell(Text('${idx + 1}')),
                                 DataCell(
                                   SizedBox(
-                                    width: 180,
+                                    width: 220,
                                     child: TextFormField(
                                       initialValue: item.productName,
                                       decoration: const InputDecoration(border: InputBorder.none),
@@ -679,7 +924,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 ),
                                 DataCell(
                                   SizedBox(
-                                    width: 70,
+                                    width: 85,
                                     child: TextFormField(
                                       initialValue: item.pack,
                                       decoration: const InputDecoration(border: InputBorder.none),
@@ -689,7 +934,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 ),
                                 DataCell(
                                   SizedBox(
-                                    width: 90,
+                                    width: 110,
                                     child: TextFormField(
                                       initialValue: item.batchNumber,
                                       decoration: const InputDecoration(border: InputBorder.none),
@@ -699,7 +944,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 ),
                                 DataCell(
                                   SizedBox(
-                                    width: 60,
+                                    width: 75,
                                     child: TextFormField(
                                       initialValue: item.expiryDate,
                                       decoration: const InputDecoration(border: InputBorder.none),
@@ -709,7 +954,17 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 ),
                                 DataCell(
                                   SizedBox(
-                                    width: 50,
+                                    width: 65,
+                                    child: TextFormField(
+                                      initialValue: item.hsn.isNotEmpty ? item.hsn : '3004',
+                                      decoration: const InputDecoration(border: InputBorder.none),
+                                      onChanged: (val) => item.hsn = val,
+                                    ),
+                                  ),
+                                ),
+                                DataCell(
+                                  SizedBox(
+                                    width: 65,
                                     child: TextFormField(
                                       initialValue: item.quantity.toString(),
                                       keyboardType: TextInputType.number,
@@ -720,7 +975,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 ),
                                 DataCell(
                                   SizedBox(
-                                    width: 50,
+                                    width: 55,
                                     child: TextFormField(
                                       initialValue: item.freeQty.toString(),
                                       keyboardType: TextInputType.number,
@@ -731,7 +986,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 ),
                                 DataCell(
                                   SizedBox(
-                                    width: 65,
+                                    width: 80,
                                     child: TextFormField(
                                       initialValue: item.mrp.toStringAsFixed(2),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -742,7 +997,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 ),
                                 DataCell(
                                   SizedBox(
-                                    width: 65,
+                                    width: 80,
                                     child: TextFormField(
                                       initialValue: item.purchaseRate.toStringAsFixed(2),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -753,7 +1008,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 ),
                                 DataCell(
                                   SizedBox(
-                                    width: 50,
+                                    width: 60,
                                     child: TextFormField(
                                       initialValue: item.schemeDiscount.toStringAsFixed(1),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -764,7 +1019,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 ),
                                 DataCell(
                                   SizedBox(
-                                    width: 50,
+                                    width: 60,
                                     child: TextFormField(
                                       initialValue: item.discountPercent.toStringAsFixed(1),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -775,7 +1030,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 ),
                                 DataCell(
                                   SizedBox(
-                                    width: 50,
+                                    width: 60,
                                     child: TextFormField(
                                       initialValue: item.gstPercent.toStringAsFixed(1),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -786,7 +1041,7 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                                 ),
                                 DataCell(
                                   SizedBox(
-                                    width: 75,
+                                    width: 95,
                                     child: TextFormField(
                                       initialValue: item.netAmount.toStringAsFixed(2),
                                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -857,16 +1112,31 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
     );
   }
 
-  Widget _buildSummaryTile(String label, String value, {Color? color}) {
-    return Column(
-      children: [
-        Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w500)),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: color ?? AppColors.slate800),
+  Widget _buildEditableSummaryField({
+    required String label,
+    required TextEditingController controller,
+    required ValueChanged<String> onChanged,
+    Color? color,
+  }) {
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2.0),
+        child: TextField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color ?? AppColors.slate800),
+          decoration: InputDecoration(
+            labelText: label,
+            labelStyle: TextStyle(fontSize: 10, color: color ?? AppColors.slate800, fontWeight: FontWeight.bold),
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+            filled: true,
+            fillColor: Colors.white,
+          ),
+          onChanged: onChanged,
         ),
-      ],
+      ),
     );
   }
 }

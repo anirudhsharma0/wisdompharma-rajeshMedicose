@@ -12,7 +12,6 @@ import '../../../data/models/customer_model.dart';
 import '../../../data/models/voucher_model.dart';
 import '../../../data/models/purchase_bill_model.dart';
 import '../../../data/models/bill_model.dart';
-import '../../../data/models/inventory_model.dart';
 import '../../../data/models/medicine_master_model.dart';
 import '../../../data/services/sqlite_service.dart';
 import '../../../data/services/pdf_service.dart';
@@ -788,13 +787,6 @@ class _PartiesScreenState extends State<PartiesScreen> {
   if (initialScannedBill != null && initialScannedBill.items.isNotEmpty) {
     for (var item in initialScannedBill.items) {
       double effectiveRate = item.purchaseRate;
-      if (item.quantity > 1 && item.purchaseRate > 0) {
-        if ((item.purchaseRate * item.quantity - item.netAmount).abs() > (item.netAmount * 0.4)) {
-          effectiveRate = item.purchaseRate / item.quantity;
-        } else if ((item.purchaseRate - item.netAmount).abs() < 1.0) {
-          effectiveRate = item.purchaseRate / item.quantity;
-        }
-      }
 
       itemRows.add({
         'name': TextEditingController(text: item.productName),
@@ -1399,14 +1391,25 @@ class _PartiesScreenState extends State<PartiesScreen> {
                     final qty = int.tryParse(qStr) ?? 1;
                     final rate = double.tryParse(r['rate']!.text) ?? 0.0;
                     final mrp = double.tryParse(r['mrp']!.text) ?? (rate > 0 ? rate * 1.2 : 0.0);
+                    final sch = double.tryParse(r['sch']?.text ?? '0.0') ?? 0.0;
+                    final dis = double.tryParse(r['dis']?.text ?? '0.0') ?? 0.0;
+                    final gst = double.tryParse(r['gst']?.text ?? '0.0') ?? 0.0;
+                    final pack = r['pack']?.text.trim() ?? '';
+                    final hsn = r['hsn']?.text.trim() ?? '3004';
                     return {
                       'medicineName': mName,
                       'batchNumber': bNo,
                       'expiryDate': exp,
                       'qty': qty,
+                      'pack': pack,
+                      'hsn': hsn,
                       'purchasePrice': rate,
+                      'rate': rate,
                       'mrp': mrp,
                       'salePrice': mrp,
+                      'sch': sch,
+                      'dis': dis,
+                      'gst': gst,
                     };
                   }).where((i) => (i['medicineName'] as String).isNotEmpty).toList();
 
@@ -1424,6 +1427,24 @@ class _PartiesScreenState extends State<PartiesScreen> {
                     receiptNo: rcptNoCtrl.text.trim().isNotEmpty ? rcptNoCtrl.text.trim() : invNo,
                     items: purchaseItems,
                     createdAt: DateTime.now(),
+                    itemsSubtotal: (initialScannedBill != null && initialScannedBill.itemsSubtotal > 0)
+                        ? initialScannedBill.itemsSubtotal
+                        : totalSubTotal,
+                    billDiscountAmount: (initialScannedBill != null && initialScannedBill.billDiscountAmount > 0)
+                        ? initialScannedBill.billDiscountAmount
+                        : totalDis,
+                    netTaxableAmount: (initialScannedBill != null && initialScannedBill.netTaxableAmount > 0)
+                        ? initialScannedBill.netTaxableAmount
+                        : totalTaxable,
+                    totalCGST: (initialScannedBill != null && initialScannedBill.totalCGST > 0)
+                        ? initialScannedBill.totalCGST
+                        : (totalTax / 2),
+                    totalSGST: (initialScannedBill != null && initialScannedBill.totalSGST > 0)
+                        ? initialScannedBill.totalSGST
+                        : (totalTax / 2),
+                    roundOff: (initialScannedBill != null && initialScannedBill.roundOff != 0)
+                        ? initialScannedBill.roundOff
+                        : (totalBillAmount - (totalSubTotal - totalDis + totalTax)),
                   ));
 
                   if (party.partyType == 'Supplier') {
@@ -2040,78 +2061,80 @@ class _PartiesScreenState extends State<PartiesScreen> {
           final schDisAmt = grossLine * (sch / 100.0);
           final tradeDisAmt = afterScheme * (d / 100.0);
           final lineDis = schDisAmt + tradeDisAmt;
-          final netLineTaxable = grossLine - lineDis;
+          final roundedTaxable = double.parse((grossLine - lineDis).toStringAsFixed(2));
 
           calcSubTotal += grossLine;
           calcTotalDis += lineDis;
 
           if (g == 5.0) {
-            calcGst5Taxable += netLineTaxable;
-            calcGst5Tax += netLineTaxable * 0.05;
+            calcGst5Taxable += roundedTaxable;
+            calcGst5Tax += roundedTaxable * 0.05;
           } else if (g == 12.0) {
-            calcGst12Taxable += netLineTaxable;
-            calcGst12Tax += netLineTaxable * 0.12;
+            calcGst12Taxable += roundedTaxable;
+            calcGst12Tax += roundedTaxable * 0.12;
           } else if (g == 18.0) {
-            calcGst18Taxable += netLineTaxable;
-            calcGst18Tax += netLineTaxable * 0.18;
+            calcGst18Taxable += roundedTaxable;
+            calcGst18Tax += roundedTaxable * 0.18;
           }
         }
 
-        subTotal = calcSubTotal;
-
-        double calcSchDis = 0.0;
-        for (var it in items) {
-          final q = (it['qty'] as num?)?.toInt() ?? 1;
-          final r = (it['rate'] as num?)?.toDouble() ?? 0.0;
-          final sch = (it['sch'] as num?)?.toDouble() ?? 0.0;
-          calcSchDis += (q * r) * (sch / 100.0);
-        }
-
-        totalDis = calcSchDis > 0 ? calcSchDis : calcTotalDis;
-
-        double netBase = (subTotal - totalDis).clamp(0.0, 9999999.0);
-        totalTaxable = netBase;
-
-        double finalGst5Tax = 0.0, finalGst12Tax = 0.0, finalGst18Tax = 0.0;
-        for (var it in items) {
-          final q = (it['qty'] as num?)?.toInt() ?? 1;
-          final r = (it['rate'] as num?)?.toDouble() ?? 0.0;
-          final sch = (it['sch'] as num?)?.toDouble() ?? 0.0;
-          final g = (it['gst'] as num?)?.toDouble() ?? 0.0;
-
-          final grossLine = q * r;
-          final afterSch = grossLine * (1.0 - (sch / 100.0));
-
-          if (g == 5.0) {
-            gst5Taxable += afterSch;
-            finalGst5Tax += afterSch * 0.05;
-          } else if (g == 12.0) {
-            gst12Taxable += afterSch;
-            finalGst12Tax += afterSch * 0.12;
-          } else if (g == 18.0) {
-            gst18Taxable += afterSch;
-            finalGst18Tax += afterSch * 0.18;
-          }
-        }
-
-        gst5Tax = finalGst5Tax;
-        gst12Tax = finalGst12Tax;
-        gst18Tax = finalGst18Tax;
-        totalTax = gst5Tax + gst12Tax + gst18Tax;
-
-        if (transaction.totalAmount > 0) {
-          currBill = transaction.totalAmount;
+        PurchaseBillModel? pBill;
+        if (raw is PurchaseBillModel) {
+          pBill = raw;
         } else {
-          currBill = (subTotal - totalDis + totalTax).roundToDouble();
+          try {
+            pBill = provider.purchaseBills.firstWhere(
+              (pb) => pb.billNumber == transaction.refNumber || pb.receiptNo == transaction.refNumber || (pb.id != null && pb.id == transaction.id),
+            );
+          } catch (_) {}
         }
-        roundOff = currBill - (subTotal - totalDis + totalTax);
+
+        if (pBill != null && (pBill.totalCGST > 0 || pBill.itemsSubtotal > 0)) {
+          subTotal = pBill.itemsSubtotal > 0 ? pBill.itemsSubtotal : calcSubTotal;
+          totalDis = pBill.billDiscountAmount > 0 ? pBill.billDiscountAmount : calcTotalDis;
+          totalTaxable = pBill.netTaxableAmount > 0 ? pBill.netTaxableAmount : calcGst5Taxable;
+          gst5Taxable = totalTaxable;
+          totalTax = pBill.totalCGST + pBill.totalSGST;
+          gst5Tax = totalTax;
+          roundOff = pBill.roundOff;
+          currBill = pBill.totalAmount;
+        } else {
+          subTotal = calcSubTotal;
+          totalDis = calcTotalDis;
+          gst5Taxable = calcGst5Taxable;
+          gst5Tax = calcGst5Tax;
+          gst12Taxable = calcGst12Taxable;
+          gst12Tax = calcGst12Tax;
+          gst18Taxable = calcGst18Taxable;
+          gst18Tax = calcGst18Tax;
+          totalTax = gst5Tax + gst12Tax + gst18Tax;
+          totalTaxable = gst5Taxable + gst12Taxable + gst18Taxable;
+
+          if (transaction.totalAmount > 0) {
+            currBill = transaction.totalAmount;
+          } else {
+            currBill = (subTotal - totalDis + totalTax).roundToDouble();
+          }
+          roundOff = currBill - (subTotal - totalDis + totalTax);
+        }
       }
       totalItems = items.length;
       if (totalQty == 0) totalQty = 1;
     }
 
-    double cgst = totalTax / 2.0;
-    double sgst = totalTax / 2.0;
+    PurchaseBillModel? pBillForGst;
+    if (raw is PurchaseBillModel) {
+      pBillForGst = raw;
+    } else {
+      try {
+        pBillForGst = provider.purchaseBills.firstWhere(
+          (pb) => pb.billNumber == transaction.refNumber || pb.receiptNo == transaction.refNumber || (pb.id != null && pb.id == transaction.id),
+        );
+      } catch (_) {}
+    }
+
+    double cgst = (pBillForGst != null && pBillForGst.totalCGST > 0) ? pBillForGst.totalCGST : totalTax / 2.0;
+    double sgst = (pBillForGst != null && pBillForGst.totalSGST > 0) ? pBillForGst.totalSGST : totalTax / 2.0;
     String displayPartyName = party.name;
     final agencyMatch = RegExp(r'Agency:\s*([^,\n\(\)]+)', caseSensitive: false).firstMatch(transaction.remarks ?? '');
     if (agencyMatch != null && agencyMatch.group(1) != null && agencyMatch.group(1)!.trim().isNotEmpty) {

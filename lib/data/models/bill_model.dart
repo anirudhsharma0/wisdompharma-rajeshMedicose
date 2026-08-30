@@ -140,19 +140,19 @@ class BillModel {
   // Gross Sub Total (Sum of Rate * Qty for all items)
   double get subTotal {
     if (items.isNotEmpty) {
-      return items.fold(0.0, (sum, item) => sum + item.grossAmount);
+      return items.fold(0.0, (acc, item) => acc + item.grossAmount);
     }
     return totalAmount;
   }
 
   // Total scheme discount
   double get totalSchemeDiscount {
-    return items.fold(0.0, (sum, item) => sum + item.schemeDiscAmount);
+    return items.fold(0.0, (acc, item) => acc + item.schemeDiscAmount);
   }
 
   // Total trade discount
   double get totalTradeDiscount {
-    return items.fold(0.0, (sum, item) => sum + item.tradeDiscAmount);
+    return items.fold(0.0, (acc, item) => acc + item.tradeDiscAmount);
   }
 
   // Total discount (Scheme + Trade)
@@ -186,7 +186,7 @@ class BillModel {
 
   // Total Qty Count (including free qty)
   int get totalQtyCount =>
-      items.fold(0, (sum, item) => sum + item.quantity + item.freeQty);
+      items.fold(0, (acc, item) => acc + item.quantity + item.freeQty);
 
   factory BillModel.fromMap(Map<String, dynamic> map, String id) {
     DateTime createdDate = DateTime.now();
