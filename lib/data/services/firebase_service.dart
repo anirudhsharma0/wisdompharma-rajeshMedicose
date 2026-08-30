@@ -53,10 +53,11 @@ class FirebaseService {
 
   // ================= BILLS API =================
 
-  // Stream bills in real-time ordered by creation date descending
-  Stream<List<BillModel>> streamBills() {
+  // Stream bills in real-time ordered by creation date descending with limit
+  Stream<List<BillModel>> streamBills({int limit = 100}) {
     return _billsRef
         .orderBy('createdAt', descending: true)
+        .limit(limit)
         .snapshots()
         .map((snapshot) {
       return snapshot.docs.map((doc) {
@@ -557,10 +558,11 @@ class FirebaseService {
     return docRef.id;
   }
 
-  // Stream payments
-  Stream<List<CustomerPaymentModel>> streamCustomerPayments() {
+  // Stream payments with limit
+  Stream<List<CustomerPaymentModel>> streamCustomerPayments({int limit = 100}) {
     return _paymentsRef
         .orderBy('createdAt', descending: true)
+        .limit(limit)
         .snapshots()
         .map((snapshot) {
       return snapshot.docs.map((doc) {
@@ -573,9 +575,10 @@ class FirebaseService {
 
   CollectionReference get _purchaseBillsRef => _storeRef.doc(storeId).collection('purchase_bills');
 
-  Stream<List<PurchaseBillModel>> streamPurchaseBills() {
+  Stream<List<PurchaseBillModel>> streamPurchaseBills({int limit = 100}) {
     return _purchaseBillsRef
         .orderBy('createdAt', descending: true)
+        .limit(limit)
         .snapshots()
         .map((snapshot) {
       return snapshot.docs.map((doc) {
@@ -609,9 +612,10 @@ class FirebaseService {
 
   CollectionReference get _vouchersRef => _storeRef.doc(storeId).collection('vouchers');
 
-  Stream<List<VoucherModel>> streamVouchers() {
+  Stream<List<VoucherModel>> streamVouchers({int limit = 100}) {
     return _vouchersRef
         .orderBy('createdAt', descending: true)
+        .limit(limit)
         .snapshots()
         .map((snapshot) {
       return snapshot.docs.map((doc) {

@@ -38,6 +38,7 @@ class DashboardProvider extends ChangeNotifier {
 
   bool _isLoading = true;
   bool _firebaseActive = false;
+  Timer? _saveOfflineTimer;
 
   // Getters
   List<BillModel> get bills => _bills;
@@ -248,16 +249,19 @@ class DashboardProvider extends ChangeNotifier {
   }
 
   Future<void> _saveOfflineCustomers() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final customersListMap = _customers.map((c) => {...c.toMap(), 'id': c.id}).toList();
-      await prefs.setString('offline_customers_json', jsonEncode(customersListMap));
-
-      final paymentsListMap = _customerPayments.map((p) => {...p.toMap(), 'id': p.id, 'createdAt': p.createdAt.toIso8601String()}).toList();
-      await prefs.setString('offline_payments_json', jsonEncode(paymentsListMap));
-    } catch (e) {
-      debugPrint('Error saving offline customers: $e');
-    }
+    _saveOfflineTimer?.cancel();
+    _saveOfflineTimer = Timer(const Duration(milliseconds: 500), () async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final customersListMap = _customers.map((c) => {...c.toMap(), 'id': c.id}).toList();
+        final paymentsListMap = _customerPayments.map((p) => {...p.toMap(), 'id': p.id, 'createdAt': p.createdAt.toIso8601String()}).toList();
+        
+        await prefs.setString('offline_customers_json', jsonEncode(customersListMap));
+        await prefs.setString('offline_payments_json', jsonEncode(paymentsListMap));
+      } catch (e) {
+        debugPrint('Error saving offline customers: $e');
+      }
+    });
   }
 
   // ================= METRICS CALCULATIONS =================
