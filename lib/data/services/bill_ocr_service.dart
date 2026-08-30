@@ -328,7 +328,7 @@ class BillOcrService {
   static final BillOcrService instance = BillOcrService._internal();
   BillOcrService._internal();
 
-  static const String _defaultApiKey = '';
+  static const String _defaultApiKey = String.fromEnvironment('GEMINI_API_KEY', defaultValue: '');
   static const String _prefApiKey = 'gemini_ocr_api_key';
   static const String _prefPendingBills = 'pending_scanned_bills_queue';
 

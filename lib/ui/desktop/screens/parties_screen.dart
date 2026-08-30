@@ -18,6 +18,7 @@ import '../../../data/services/pdf_service.dart';
 import '../../../data/services/bill_ocr_service.dart';
 import '../../../core/utils/platform_utils.dart';
 import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../../common/widgets/custom_card.dart';
 import '../../common/widgets/loading_overlay.dart';
@@ -92,6 +93,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
   String _partySearchQuery = '';
   String _transactionSearchQuery = '';
   String _selectedCategoryFilter = 'ALL'; // 'ALL', 'SUPPLIERS', 'CUSTOMERS'
+  DateTimeRange? _selectedDateRange;
   
   String? _selectedPartyId;
 
@@ -266,6 +268,16 @@ class _PartiesScreenState extends State<PartiesScreen> {
     // Sort newest first
     list.sort((a, b) => b.date.compareTo(a.date));
 
+    // Apply date range filter
+    if (_selectedDateRange != null) {
+      final start = DateTime(_selectedDateRange!.start.year, _selectedDateRange!.start.month, _selectedDateRange!.start.day, 0, 0, 0);
+      final end = DateTime(_selectedDateRange!.end.year, _selectedDateRange!.end.month, _selectedDateRange!.end.day, 23, 59, 59);
+      list = list.where((t) =>
+        (t.date.isAfter(start) || t.date.isAtSameMomentAs(start)) &&
+        (t.date.isBefore(end) || t.date.isAtSameMomentAs(end))
+      ).toList();
+    }
+
     // Apply transaction search filter
     if (_transactionSearchQuery.trim().isNotEmpty) {
       final tq = _transactionSearchQuery.trim().toLowerCase();
@@ -277,6 +289,240 @@ class _PartiesScreenState extends State<PartiesScreen> {
     }
 
     return list;
+  }
+
+  Future<void> _pickDateRange(BuildContext context) async {
+    final now = DateTime.now();
+    final initialRange = _selectedDateRange ?? DateTimeRange(
+      start: DateTime(now.year, now.month, 1),
+      end: now,
+    );
+
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+      initialDateRange: initialRange,
+      builder: (context, child) {
+        return Theme(
+          data: ThemeData.light().copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppColors.primary,
+              onPrimary: Colors.white,
+              surface: Colors.white,
+              onSurface: Colors.black,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null) {
+      setState(() {
+        _selectedDateRange = picked;
+      });
+    }
+  }
+
+  Future<void> _printPartyLedger(
+    BuildContext context,
+    PartyItem party,
+    List<PartyTransaction> transactions,
+    DashboardProvider provider,
+  ) async {
+    final pdf = pw.Document();
+    final dateFormat = DateFormat('dd/MM/yyyy');
+    final timeFormat = DateFormat('dd/MM/yyyy, hh:mm a');
+
+    // Calculate Totals
+    double totalDebit = 0.0;
+    double totalCredit = 0.0;
+
+    for (var t in transactions) {
+      if (t.type == 'Sale' || t.type == 'Purchase') {
+        totalDebit += t.totalAmount;
+      } else if (t.type == 'Payment-In' || t.type == 'Payment-Out') {
+        totalCredit += t.totalAmount;
+      }
+    }
+
+    final periodStr = _selectedDateRange != null
+        ? '${dateFormat.format(_selectedDateRange!.start)} to ${dateFormat.format(_selectedDateRange!.end)}'
+        : 'All Time Statement';
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(24),
+        build: (pw.Context context) {
+          return [
+            // Pharmacy Header
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(
+                      provider.pharmacyName.toUpperCase(),
+                      style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+                    ),
+                    pw.Text(provider.storeAddress, style: const pw.TextStyle(fontSize: 9)),
+                    if (provider.gstin.isNotEmpty)
+                      pw.Text('GSTIN: ${provider.gstin}', style: const pw.TextStyle(fontSize: 9)),
+                  ],
+                ),
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.end,
+                  children: [
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      color: PdfColors.blueGrey800,
+                      child: pw.Text(
+                        'STATEMENT OF ACCOUNT',
+                        style: pw.TextStyle(color: PdfColors.white, fontWeight: pw.FontWeight.bold, fontSize: 11),
+                      ),
+                    ),
+                    pw.SizedBox(height: 4),
+                    pw.Text('Period: $periodStr', style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+                    pw.Text('Generated: ${timeFormat.format(DateTime.now())}', style: const pw.TextStyle(fontSize: 8)),
+                  ],
+                ),
+              ],
+            ),
+            pw.SizedBox(height: 12),
+            pw.Divider(thickness: 1),
+            pw.SizedBox(height: 8),
+
+            // Party Profile Summary
+            pw.Container(
+              padding: const pw.EdgeInsets.all(8),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.grey400),
+                color: PdfColors.grey100,
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        'Party Name: ${party.name.toUpperCase()}',
+                        style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+                      ),
+                      pw.Text('Phone: ${party.phone.isNotEmpty ? party.phone : "N/A"}', style: const pw.TextStyle(fontSize: 9)),
+                      if (party.gstin != null && party.gstin!.isNotEmpty)
+                        pw.Text('GSTIN: ${party.gstin}', style: const pw.TextStyle(fontSize: 9)),
+                    ],
+                  ),
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.end,
+                    children: [
+                      pw.Text('Type: ${party.partyType}', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                      pw.Text(
+                        'Net Balance Due: Rs. ${party.amount.toStringAsFixed(2)}',
+                        style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: PdfColors.red900),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 12),
+
+            // Table of Transactions
+            pw.TableHelper.fromTextArray(
+              headers: ['#', 'Date & Time', 'Type', 'Ref / Bill No.', 'Debit (Rs.)', 'Credit (Rs.)', 'Remarks'],
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9, color: PdfColors.white),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.blue900),
+              rowDecoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5))),
+              cellAlignment: pw.Alignment.centerLeft,
+              cellStyle: const pw.TextStyle(fontSize: 8.5),
+              cellAlignments: {
+                0: pw.Alignment.center,
+                1: pw.Alignment.centerLeft,
+                2: pw.Alignment.center,
+                3: pw.Alignment.centerLeft,
+                4: pw.Alignment.centerRight,
+                5: pw.Alignment.centerRight,
+                6: pw.Alignment.centerLeft,
+              },
+              data: List<List<String>>.generate(transactions.length, (index) {
+                final t = transactions[index];
+                final isDebit = t.type == 'Sale' || t.type == 'Purchase';
+                final isCredit = t.type == 'Payment-In' || t.type == 'Payment-Out';
+                return [
+                  '${index + 1}',
+                  timeFormat.format(t.date),
+                  t.type,
+                  t.refNumber,
+                  isDebit ? t.totalAmount.toStringAsFixed(2) : '-',
+                  isCredit ? t.totalAmount.toStringAsFixed(2) : '-',
+                  t.remarks ?? '-',
+                ];
+              }),
+            ),
+            pw.SizedBox(height: 12),
+
+            // Financial Totals Summary
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.end,
+              children: [
+                pw.Container(
+                  width: 250,
+                  padding: const pw.EdgeInsets.all(8),
+                  decoration: pw.BoxDecoration(
+                    border: pw.Border.all(color: PdfColors.black, width: 1),
+                  ),
+                  child: pw.Column(
+                    children: [
+                      pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text('Total Sales/Purchases:', style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+                          pw.Text('Rs. ${totalDebit.toStringAsFixed(2)}', style: const pw.TextStyle(fontSize: 9)),
+                        ],
+                      ),
+                      pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text('Total Payments:', style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+                          pw.Text('Rs. ${totalCredit.toStringAsFixed(2)}', style: const pw.TextStyle(fontSize: 9)),
+                        ],
+                      ),
+                      pw.Divider(thickness: 0.5),
+                      pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text('Net Pending Outstanding:', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                          pw.Text('Rs. ${party.amount.toStringAsFixed(2)}', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.red900)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            pw.SizedBox(height: 20),
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text('Terms: Computer Generated Statement', style: pw.TextStyle(fontSize: 8, fontStyle: pw.FontStyle.italic)),
+                pw.Text('For ${provider.pharmacyName}', style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+              ],
+            ),
+          ];
+        },
+      ),
+    );
+
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => pdf.save(),
+      name: 'Ledger_${party.name.replaceAll(' ', '_')}.pdf',
+    );
   }
 
   void _showAddPartyDialog(BuildContext context, DashboardProvider provider) {
@@ -3326,10 +3572,94 @@ class _PartiesScreenState extends State<PartiesScreen> {
                                             'Transactions Ledger (${transactions.length})',
                                             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
                                           ),
-                                          SingleChildScrollView(
-                                            scrollDirection: Axis.horizontal,
-                                            child: Row(
-                                              children: [
+                                          const SizedBox(width: 8),
+                                          Flexible(
+                                            child: SingleChildScrollView(
+                                              scrollDirection: Axis.horizontal,
+                                              child: Row(
+                                                children: [
+                                                PopupMenuButton<String>(
+                                                  tooltip: 'Filter by Date',
+                                                  onSelected: (val) async {
+                                                    final now = DateTime.now();
+                                                    if (val == 'TODAY') {
+                                                      setState(() {
+                                                        _selectedDateRange = DateTimeRange(start: DateTime(now.year, now.month, now.day), end: now);
+                                                      });
+                                                    } else if (val == 'WEEK') {
+                                                      final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+                                                      setState(() {
+                                                        _selectedDateRange = DateTimeRange(start: DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day), end: now);
+                                                      });
+                                                    } else if (val == 'MONTH') {
+                                                      setState(() {
+                                                        _selectedDateRange = DateTimeRange(start: DateTime(now.year, now.month, 1), end: now);
+                                                      });
+                                                    } else if (val == 'CUSTOM') {
+                                                      await _pickDateRange(context);
+                                                    } else if (val == 'CLEAR') {
+                                                      setState(() {
+                                                        _selectedDateRange = null;
+                                                      });
+                                                    }
+                                                  },
+                                                  itemBuilder: (ctx) => [
+                                                    const PopupMenuItem(value: 'TODAY', child: Text('📅 Today')),
+                                                    const PopupMenuItem(value: 'WEEK', child: Text('📅 This Week')),
+                                                    const PopupMenuItem(value: 'MONTH', child: Text('📅 This Month')),
+                                                    const PopupMenuItem(value: 'CUSTOM', child: Text('📆 Custom Date Range...')),
+                                                    if (_selectedDateRange != null)
+                                                      const PopupMenuItem(value: 'CLEAR', child: Text('❌ Clear Date Filter', style: TextStyle(color: Colors.red))),
+                                                  ],
+                                                  child: Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                                    decoration: BoxDecoration(
+                                                      color: _selectedDateRange != null ? Colors.blue.withValues(alpha: 0.12) : Colors.grey.shade100,
+                                                      borderRadius: BorderRadius.circular(8),
+                                                      border: Border.all(color: _selectedDateRange != null ? Colors.blue : Colors.grey.shade300),
+                                                    ),
+                                                    child: Row(
+                                                      mainAxisSize: MainAxisSize.min,
+                                                      children: [
+                                                        Icon(Icons.date_range, size: 15, color: _selectedDateRange != null ? Colors.blue.shade800 : Colors.black87),
+                                                        const SizedBox(width: 6),
+                                                        Text(
+                                                          _selectedDateRange != null
+                                                              ? '${DateFormat('dd/MM').format(_selectedDateRange!.start)} - ${DateFormat('dd/MM').format(_selectedDateRange!.end)}'
+                                                              : 'Date Filter',
+                                                          style: TextStyle(
+                                                            fontSize: 12,
+                                                            fontWeight: FontWeight.bold,
+                                                            color: _selectedDateRange != null ? Colors.blue.shade800 : Colors.black87,
+                                                          ),
+                                                        ),
+                                                        if (_selectedDateRange != null) ...[
+                                                          const SizedBox(width: 4),
+                                                          InkWell(
+                                                            onTap: () => setState(() => _selectedDateRange = null),
+                                                            child: const Icon(Icons.close, size: 14, color: Colors.blue),
+                                                          )
+                                                        ],
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+
+                                                ElevatedButton.icon(
+                                                  onPressed: transactions.isEmpty
+                                                      ? null
+                                                      : () => _printPartyLedger(context, selectedParty, transactions, provider),
+                                                  icon: const Icon(Icons.print, size: 14),
+                                                  label: const Text('Print Statement', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                                  style: ElevatedButton.styleFrom(
+                                                    backgroundColor: const Color(0xFF1E293B),
+                                                    foregroundColor: Colors.white,
+                                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+
                                                 if (selectedParty.partyType == 'Customer') ...[
                                                   ElevatedButton.icon(
                                                     onPressed: () => _showAddCustomerSaleDialog(context, selectedParty, provider),
@@ -3384,82 +3714,83 @@ class _PartiesScreenState extends State<PartiesScreen> {
                                               ],
                                             ),
                                           ),
-                                        ],
-                                      ),
+                                        ),
+                                      ],
                                     ),
-                                    const Divider(height: 1),
+                                  ),
+                                  const Divider(height: 1),
 
-                                    // Table View
-                                    Expanded(
-                                      child: transactions.isEmpty
-                                          ? const Center(
-                                              child: Text(
-                                                'No transactions recorded for this party yet.',
-                                                style: TextStyle(color: AppColors.textMuted),
-                                              ),
-                                            )
-                                          : SingleChildScrollView(
-                                              child: SizedBox(
-                                                width: double.infinity,
-                                                child: DataTable(
-                                                  columnSpacing: 14,
-                                                  showCheckboxColumn: false,
-                                                  columns: const [
-                                                    DataColumn(label: Text('Type', style: TextStyle(fontWeight: FontWeight.bold))),
-                                                    DataColumn(label: Text('Ref Number', style: TextStyle(fontWeight: FontWeight.bold))),
-                                                    DataColumn(label: Text('Date & Time', style: TextStyle(fontWeight: FontWeight.bold))),
-                                                    DataColumn(label: Text('Total (₹)', style: TextStyle(fontWeight: FontWeight.bold))),
-                                                    DataColumn(label: Text('Action', style: TextStyle(fontWeight: FontWeight.bold))),
-                                                  ],
-                                                  rows: transactions.map((t) {
-                                                    final isOut = t.type == 'Payment-Out' || t.type == 'Purchase';
-                                                    return DataRow(
-                                                      onSelectChanged: (_) => _showTransactionDetailsDialog(context, selectedParty, t, provider),
-                                                      cells: [
-                                                        DataCell(
-                                                          Container(
-                                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                                            decoration: BoxDecoration(
-                                                              color: isOut ? Colors.orange.withValues(alpha: 0.12) : AppColors.success.withValues(alpha: 0.12),
-                                                              borderRadius: BorderRadius.circular(6),
-                                                            ),
-                                                            child: Text(
-                                                              t.type,
-                                                              style: TextStyle(
-                                                                color: isOut ? Colors.orange.shade800 : AppColors.success,
-                                                                fontWeight: FontWeight.bold,
-                                                                fontSize: 11,
-                                                              ),
-                                                            ),
-                                                          ),
-                                                        ),
-                                                        DataCell(Text(t.refNumber, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12))),
-                                                        DataCell(Text(DateFormat('dd/MM/yyyy, hh:mm a').format(t.date), style: const TextStyle(fontSize: 12))),
-                                                        DataCell(Text('₹${t.totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
-                                                        DataCell(
-                                                          Row(
-                                                            mainAxisSize: MainAxisSize.min,
-                                                            children: [
-                                                              IconButton(
-                                                                icon: const Icon(Icons.visibility_outlined, size: 18, color: AppColors.primary),
-                                                                tooltip: 'View Transaction Details',
-                                                                onPressed: () => _showTransactionDetailsDialog(context, selectedParty, t, provider),
-                                                              ),
-                                                              IconButton(
-                                                                icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),
-                                                                tooltip: 'Delete Transaction',
-                                                                onPressed: () => _deleteTransaction(context, selectedParty, t, provider),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    );
-                                                  }).toList(),
-                                                ),
-                                              ),
-                                            ),
-                                    ),
+                                     // Table View
+                                     Expanded(
+                                       child: transactions.isEmpty
+                                           ? const Center(
+                                               child: Text(
+                                                 'No transactions recorded for this party yet.',
+                                                 style: TextStyle(color: AppColors.textMuted),
+                                               ),
+                                             )
+                                           : SingleChildScrollView(
+                                               child: SizedBox(
+                                                 width: double.infinity,
+                                                 child: DataTable(
+                                                   columnSpacing: 14,
+                                                   showCheckboxColumn: false,
+                                                   columns: const [
+                                                     DataColumn(label: Text('Type', style: TextStyle(fontWeight: FontWeight.bold))),
+                                                     DataColumn(label: Text('Ref Number', style: TextStyle(fontWeight: FontWeight.bold))),
+                                                     DataColumn(label: Text('Date & Time', style: TextStyle(fontWeight: FontWeight.bold))),
+                                                     DataColumn(label: Text('Total (₹)', style: TextStyle(fontWeight: FontWeight.bold))),
+                                                     DataColumn(label: Text('Action', style: TextStyle(fontWeight: FontWeight.bold))),
+                                                   ],
+                                                   rows: transactions.map((t) {
+                                                     final isOut = t.type == 'Payment-Out' || t.type == 'Purchase';
+                                                     return DataRow(
+                                                       onSelectChanged: (_) => _showTransactionDetailsDialog(context, selectedParty, t, provider),
+                                                       cells: [
+                                                         DataCell(
+                                                           Container(
+                                                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                             decoration: BoxDecoration(
+                                                               color: isOut ? Colors.orange.withValues(alpha: 0.12) : AppColors.success.withValues(alpha: 0.12),
+                                                               borderRadius: BorderRadius.circular(6),
+                                                             ),
+                                                             child: Text(
+                                                               t.type,
+                                                               style: TextStyle(
+                                                                 color: isOut ? Colors.orange.shade800 : AppColors.success,
+                                                                 fontWeight: FontWeight.bold,
+                                                                 fontSize: 11,
+                                                               ),
+                                                             ),
+                                                           ),
+                                                         ),
+                                                         DataCell(Text(t.refNumber, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12))),
+                                                         DataCell(Text(DateFormat('dd/MM/yyyy, hh:mm a').format(t.date), style: const TextStyle(fontSize: 12))),
+                                                         DataCell(Text('₹${t.totalAmount.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
+                                                         DataCell(
+                                                           Row(
+                                                             mainAxisSize: MainAxisSize.min,
+                                                             children: [
+                                                               IconButton(
+                                                                 icon: const Icon(Icons.visibility_outlined, size: 18, color: AppColors.primary),
+                                                                 tooltip: 'View Transaction Details',
+                                                                 onPressed: () => _showTransactionDetailsDialog(context, selectedParty, t, provider),
+                                                               ),
+                                                               IconButton(
+                                                                 icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                                                                 tooltip: 'Delete Transaction',
+                                                                 onPressed: () => _deleteTransaction(context, selectedParty, t, provider),
+                                                               ),
+                                                             ],
+                                                           ),
+                                                         ),
+                                                       ],
+                                                     );
+                                                   }).toList(),
+                                                 ),
+                                               ),
+                                             ),
+                                     ),
                                   ],
                                 ),
                               ),

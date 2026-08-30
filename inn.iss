@@ -2,10 +2,10 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 ; Non-commercial use only
 
-#define MyAppName "Wisdom Pharma"
-#define MyAppVersion "5.1"
+#define MyAppName "WisdomPharma"
+#define MyAppVersion "5.2"
 #define MyAppPublisher "Wisdomcoresolutions"
-#define MyAppURL "https://www.wisdomcoresolutions.store"
+#define MyAppURL "https://www.Wisdomcoresolutions.store/"
 #define MyAppExeName "medical_store.exe"
 #define MyAppAssocName MyAppName + " File"
 #define MyAppAssocExt ".myp"
@@ -14,7 +14,7 @@
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
 ; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
-AppId={{FC2FC0E4-2D26-4E25-8B43-BCC71528F686}
+AppId={{4F9526F5-18B3-4ECA-93BA-DA2EB1C233E1}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 ;AppVerName={#MyAppName} {#MyAppVersion}
@@ -39,8 +39,8 @@ DisableProgramGroupPage=yes
 ; Uncomment the following line to run in non administrative install mode (install for current user only).
 ;PrivilegesRequired=lowest
 OutputDir=C:\Users\Anirudh\Desktop
-OutputBaseFilename=WisdomPharma_Setup
-SetupIconFile=F:\Project\Medical\assets\icon\installer_icon.ico
+OutputBaseFilename=wisdompharma-setup
+SetupIconFile=F:\Project\Medical\assets\icon\app_icon.ico
 SolidCompression=yes
 WizardStyle=modern dynamic
 

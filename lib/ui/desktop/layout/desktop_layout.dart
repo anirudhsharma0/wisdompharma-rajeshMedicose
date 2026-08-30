@@ -737,12 +737,15 @@ class _DesktopLayoutState extends State<DesktopLayout> {
             const SizedBox(width: 12),
             Icon(icon, size: 18, color: isSelected ? Colors.white : (accentColor ?? Colors.white70)),
             const SizedBox(width: 12),
-            Text(
-              title,
-              style: TextStyle(
-                color: isSelected ? Colors.white : (accentColor ?? Colors.white70),
-                fontSize: 12.5,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : (accentColor ?? Colors.white70),
+                  fontSize: 12.5,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
@@ -822,12 +825,15 @@ class _DesktopLayoutState extends State<DesktopLayout> {
                 margin: const EdgeInsets.only(right: 8),
                 color: const Color(0xFFE11D48),
               ),
-            Text(
-              title,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.white60,
-                fontSize: 11.5,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : Colors.white60,
+                  fontSize: 11.5,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],

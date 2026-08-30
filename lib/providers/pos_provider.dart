@@ -20,6 +20,8 @@ class PosProvider extends ChangeNotifier {
   // Local storage fallback if Firebase is not initialized
   final List<BillModel> _localFallbackBills = [];
 
+  DateTime? _billDate;
+
   // Getters
   List<BillItem> get cartItems => _cartItems;
   String get customerName => _customerName;
@@ -27,6 +29,13 @@ class PosProvider extends ChangeNotifier {
   double get discount => _discount;
   double get gstPercentage => _gstPercentage;
   String get paymentMode => _paymentMode;
+  DateTime get billDate => _billDate ?? DateTime.now();
+
+  bool get isCustomBillDate {
+    if (_billDate == null) return false;
+    final now = DateTime.now();
+    return !(_billDate!.year == now.year && _billDate!.month == now.month && _billDate!.day == now.day);
+  }
   List<MedicineMasterModel> get searchResults => _searchResults;
   bool get isSearching => _isSearching;
 
@@ -73,14 +82,22 @@ class PosProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setBillDate(DateTime? date) {
+    _billDate = date;
+    notifyListeners();
+  }
+
   // Clear POS billing sheet
-  void resetCart() {
+  void resetCart({bool preserveBillDate = true}) {
     _cartItems = [];
     _customerName = '';
     _customerPhone = '';
     _discount = 0.0;
     _gstPercentage = 0.0;
     _paymentMode = 'Credit';
+    if (!preserveBillDate) {
+      _billDate = null;
+    }
     _searchResults = [];
     notifyListeners();
   }
@@ -211,7 +228,7 @@ class PosProvider extends ChangeNotifier {
       gstPercentage: _gstPercentage,
       gstAmount: gstAmount,
       netAmount: netAmount,
-      createdAt: DateTime.now(),
+      createdAt: _billDate ?? DateTime.now(),
       paymentMode: _paymentMode,
     );
 

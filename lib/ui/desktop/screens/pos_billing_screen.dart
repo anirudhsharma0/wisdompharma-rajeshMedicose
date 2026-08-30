@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
 
 import '../../../core/constants/colors.dart';
 import '../../../providers/pos_provider.dart';
@@ -427,6 +428,9 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
   final FocusNode _custPhoneFocusNode = FocusNode();
   final FocusNode _discountFocusNode = FocusNode();
   final FocusNode _directAmountFocusNode = FocusNode();
+  final FocusNode _directRemarkFocusNode = FocusNode();
+
+  int _activeBillingMode = 0; // 0 = Quick Direct Cash Sale, 1 = Detailed Medicine Billing
 
   MedicineMasterModel? _selectedMasterMedicine;
   InventoryModel? _matchedInventoryItem;
@@ -434,6 +438,32 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
   List<CustomerModel> _filteredCustomers = [];
   bool _showCustomerSuggestions = false;
   bool _showVirtualNumpad = false;
+
+  Future<void> _selectBillDate(BuildContext context, PosProvider posProvider) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: posProvider.billDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+      builder: (context, child) {
+        return Theme(
+          data: ThemeData.light().copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppColors.primary,
+              onPrimary: Colors.white,
+              surface: Colors.white,
+              onSurface: Colors.black,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null) {
+      posProvider.setBillDate(picked);
+    }
+  }
 
   @override
   void initState() {
@@ -579,6 +609,7 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
     _custPhoneFocusNode.dispose();
     _discountFocusNode.dispose();
     _directAmountFocusNode.dispose();
+    _directRemarkFocusNode.dispose();
     super.dispose();
   }
 
@@ -866,8 +897,16 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
       _custPhoneController.clear();
       _discountController.text = '0';
       _directAmountController.clear();
+      _directRemarkController.clear();
 
-      // Trigger PDF print dialog ONLY if explicitly requested by clicking "Save & Print"
+      // Automatically reset focus back to Customer Name input field for rapid next bill entry
+      Future.microtask(() {
+        if (mounted) {
+          _custNameFocusNode.requestFocus();
+        }
+      });
+
+      // Trigger PDF print & Invoice Dialog ONLY if explicitly requested by clicking "Save & Print"
       if (shouldPrint) {
         try {
           await PdfService.printReceipt(
@@ -879,51 +918,75 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
         } catch (e) {
           debugPrint('Print error: $e');
         }
-      }
 
-      // Show Invoice dialog
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          backgroundColor: AppColors.background,
-          title: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                shouldPrint ? 'Bill Saved & Sent to Printer' : 'Bill Saved Successfully',
-                style: const TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.bold),
+        if (!mounted) return;
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: AppColors.background,
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Bill Saved & Sent to Printer',
+                  style: TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: AppColors.textSecondary),
+                  onPressed: () => Navigator.pop(context),
+                )
+              ],
+            ),
+            content: SizedBox(
+              width: 400,
+              child: ReceiptPreview(bill: completedBill),
+            ),
+            actions: [
+              ElevatedButton.icon(
+                icon: const Icon(Icons.print),
+                label: const Text('Print Receipt'),
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+                onPressed: () {
+                  PdfService.printReceipt(
+                    completedBill,
+                    pharmacyName: dashProvider.pharmacyName,
+                    storeAddress: dashProvider.storeAddress,
+                  );
+                },
               ),
-              IconButton(
-                icon: const Icon(Icons.close, color: AppColors.textSecondary),
+              TextButton(
+                child: const Text('Done'),
                 onPressed: () => Navigator.pop(context),
               )
             ],
           ),
-          content: SizedBox(
-            width: 400,
-            child: ReceiptPreview(bill: completedBill),
-          ),
-          actions: [
-            ElevatedButton.icon(
-              icon: const Icon(Icons.print),
-              label: const Text('Print Receipt'),
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-              onPressed: () {
-                PdfService.printReceipt(
-                  completedBill,
-                  pharmacyName: dashProvider.pharmacyName,
-                  storeAddress: dashProvider.storeAddress,
-                );
-              },
+        );
+      } else {
+        // FAST DIRECT SALE: Floating green success notification
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 22),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '✅ Bill Saved Successfully! (#${completedBill.billNumber}) — Total: ₹${completedBill.netAmount.toStringAsFixed(2)}',
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                ),
+              ],
             ),
-            TextButton(
-              child: const Text('Done'),
-              onPressed: () => Navigator.pop(context),
-            )
-          ],
-        ),
-      );
+            backgroundColor: const Color(0xFF059669),
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        );
+      }
     } else {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -986,6 +1049,7 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
       child: Column(
         children: [
           _buildKeyboardShortcutsHeader(context),
+          _buildModeTabBar(),
           if (_showVirtualNumpad)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
@@ -994,9 +1058,11 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+              child: _activeBillingMode == 0
+                  ? _buildQuickBillingView(posProvider, dashProvider)
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                   // LEFT / MAIN PANEL: Medicine Details Form + Cart Items Table (Flex 4 - Compact)
                   Expanded(
                     flex: 4,
@@ -1909,6 +1975,51 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
               ),
             ),
           ),
+          const SizedBox(width: 8),
+          Consumer<PosProvider>(
+            builder: (context, posProvider, _) {
+              return InkWell(
+                onTap: () => _selectBillDate(context, posProvider),
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: posProvider.isCustomBillDate ? Colors.orange.withValues(alpha: 0.15) : AppColors.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: posProvider.isCustomBillDate ? Colors.orange : AppColors.primary.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.calendar_today, size: 13, color: posProvider.isCustomBillDate ? Colors.orange.shade900 : AppColors.primary),
+                      const SizedBox(width: 6),
+                      Text(
+                        '📅 Date: ${DateFormat('dd/MM/yyyy').format(posProvider.billDate)}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: posProvider.isCustomBillDate ? Colors.orange.shade900 : AppColors.primary,
+                        ),
+                      ),
+                      if (posProvider.isCustomBillDate) ...[
+                        const SizedBox(width: 6),
+                        InkWell(
+                          onTap: () => posProvider.setBillDate(null),
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: const BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close, size: 12, color: Colors.orange),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -1998,6 +2109,503 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
             }).toList(),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildModeTabBar() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+      padding: const EdgeInsets.all(4.0),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: () {
+                setState(() {
+                  _activeBillingMode = 0;
+                });
+                _custNameFocusNode.requestFocus();
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: _activeBillingMode == 0 ? AppColors.primary : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.bolt, color: _activeBillingMode == 0 ? Colors.white : Colors.amber, size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      '⚡ Quick Direct Cash Sale (Fast Counter Billing)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: _activeBillingMode == 0 ? Colors.white : AppColors.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: InkWell(
+              onTap: () {
+                setState(() {
+                  _activeBillingMode = 1;
+                });
+                _searchFocusNode.requestFocus();
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: _activeBillingMode == 1 ? AppColors.primary : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.medication, color: _activeBillingMode == 1 ? Colors.white : AppColors.primary, size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      '💊 Detailed Itemized Medicine Billing',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: _activeBillingMode == 1 ? Colors.white : AppColors.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickBillingView(PosProvider posProvider, DashboardProvider dashProvider) {
+    final amt = double.tryParse(_directAmountController.text) ?? 0.0;
+    final disc = double.tryParse(_discountController.text) ?? 0.0;
+    final netAmt = (amt - disc).clamp(0.0, 9999999.0);
+
+    return Center(
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 750),
+        child: CustomCard(
+          padding: const EdgeInsets.all(24),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Title
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.bolt, color: Colors.amber, size: 28),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: const [
+                              Text(
+                                '⚡ Direct Sale / Fast Counter Billing Mode',
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                              ),
+                              Text(
+                                'Press ENTER on keyboard to jump to next input & auto-save bill!',
+                                style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Divider(color: AppColors.border, height: 1),
+                    const SizedBox(height: 16),
+
+                    // 1. Customer Info
+                    const Text('CUSTOMER INFORMATION', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryLight, letterSpacing: 0.5)),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 4,
+                          child: TextField(
+                            controller: _custNameController,
+                            focusNode: _custNameFocusNode,
+                            autofocus: true,
+                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                            decoration: InputDecoration(
+                              labelText: '1. Customer Name',
+                              hintText: 'Walk-in Customer (Type to search...)',
+                              prefixIcon: const Icon(Icons.person, size: 20, color: AppColors.primary),
+                              contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            onSubmitted: (_) {
+                              if (_showCustomerSuggestions && _filteredCustomers.isNotEmpty) {
+                                _selectCustomer(_filteredCustomers.first);
+                              }
+                              _custPhoneFocusNode.requestFocus();
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          flex: 3,
+                          child: TextField(
+                            controller: _custPhoneController,
+                            focusNode: _custPhoneFocusNode,
+                            keyboardType: TextInputType.phone,
+                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                            decoration: InputDecoration(
+                              labelText: '2. Customer Mobile Phone',
+                              hintText: '98765xxxxx (Press Enter)',
+                              prefixIcon: const Icon(Icons.phone, size: 20, color: AppColors.primary),
+                              contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            onSubmitted: (_) => _directAmountFocusNode.requestFocus(),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          flex: 3,
+                          child: InkWell(
+                            onTap: () => _selectBillDate(context, posProvider),
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 12),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: posProvider.isCustomBillDate ? Colors.orange.shade600 : Colors.grey.shade400, width: posProvider.isCustomBillDate ? 1.5 : 1),
+                                borderRadius: BorderRadius.circular(10),
+                                color: posProvider.isCustomBillDate ? Colors.orange.shade50.withValues(alpha: 0.5) : Colors.white,
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.calendar_today, size: 18, color: posProvider.isCustomBillDate ? Colors.orange.shade800 : AppColors.primary),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          posProvider.isCustomBillDate ? 'Invoice Date (Custom)' : 'Invoice Date',
+                                          style: TextStyle(fontSize: 10, color: posProvider.isCustomBillDate ? Colors.orange.shade900 : AppColors.textSecondary, fontWeight: FontWeight.bold),
+                                        ),
+                                        Text(
+                                          DateFormat('dd/MM/yyyy').format(posProvider.billDate),
+                                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: posProvider.isCustomBillDate ? Colors.orange.shade900 : AppColors.textPrimary),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (posProvider.isCustomBillDate)
+                                    IconButton(
+                                      icon: const Icon(Icons.close, size: 16, color: Colors.orange),
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(),
+                                      tooltip: 'Reset to Today',
+                                      onPressed: () => posProvider.setBillDate(null),
+                                    )
+                                  else
+                                    const Icon(Icons.arrow_drop_down, color: AppColors.primary),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // 2. Direct Sale Amount & Description
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('DIRECT SALE AMOUNT & DESCRIPTION', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primaryLight, letterSpacing: 0.5)),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                flex: 3,
+                                child: TextField(
+                                  controller: _directAmountController,
+                                  focusNode: _directAmountFocusNode,
+                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.primary, fontSize: 18),
+                                  decoration: InputDecoration(
+                                    labelText: '3. Sale Amount (₹)*',
+                                    hintText: 'e.g. 500',
+                                    prefixIcon: const Icon(Icons.currency_rupee, color: AppColors.primary),
+                                    contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                  onChanged: (_) => setState(() {}),
+                                  onSubmitted: (_) => _directRemarkFocusNode.requestFocus(),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                flex: 4,
+                                child: TextField(
+                                  controller: _directRemarkController,
+                                  focusNode: _directRemarkFocusNode,
+                                  style: const TextStyle(fontSize: 14),
+                                  decoration: InputDecoration(
+                                    labelText: '4. Description / Item Name',
+                                    hintText: 'General Medical Sale',
+                                    prefixIcon: const Icon(Icons.edit_note),
+                                    contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                  onSubmitted: (_) => _discountFocusNode.requestFocus(),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                // 3. Discount & Payment Mode
+                const Text('DISCOUNT & PAYMENT MODE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryLight, letterSpacing: 0.5)),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _discountController,
+                        focusNode: _discountFocusNode,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                        decoration: InputDecoration(
+                          labelText: '5. Discount Deduction (₹)',
+                          prefixIcon: const Icon(Icons.local_offer, size: 18, color: AppColors.textSecondary),
+                          contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onChanged: (_) => setState(() {}),
+                        onSubmitted: (_) => _triggerCheckout(posProvider, dashProvider, shouldPrint: false),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: posProvider.paymentMode,
+                        decoration: InputDecoration(
+                          labelText: 'Payment Mode',
+                          prefixIcon: const Icon(Icons.payment, size: 18, color: AppColors.textSecondary),
+                          contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        items: ['Cash', 'UPI', 'Card', 'Credit']
+                            .map((m) => DropdownMenuItem(
+                                  value: m,
+                                  child: Text(m == 'Credit' ? 'Udhar (Credit Customer Ledger)' : m, style: const TextStyle(fontSize: 13)),
+                                ))
+                            .toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            posProvider.setPaymentMode(val);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+
+                // Net Payable Live Tally Box
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Gross Amount: ₹${amt.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                          Text('Discount Deducted: ₹${disc.toStringAsFixed(2)}', style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                        ],
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          const Text('NET PAYABLE AMOUNT', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                          Text(
+                            '₹${netAmt.toStringAsFixed(2)}',
+                            style: const TextStyle(color: Color(0xFF10B981), fontSize: 24, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Action Buttons: Save / Submit Bill | Save & Print
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: () => _triggerCheckout(posProvider, dashProvider, shouldPrint: false),
+                      icon: const Icon(Icons.check_circle_outline, size: 18),
+                      label: const Text('Save / Submit Bill (F9)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton.icon(
+                      onPressed: () => _triggerCheckout(posProvider, dashProvider, shouldPrint: true),
+                      icon: const Icon(Icons.print, size: 18),
+                      label: const Text('Save & Print (F12 / Enter)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF059669),
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+              // Customer Search Autocomplete Floating Overlay
+              if (_showCustomerSuggestions && _filteredCustomers.isNotEmpty)
+                Positioned(
+                  top: 135,
+                  left: 0,
+                  right: 0,
+                  child: Material(
+                    elevation: 12,
+                    borderRadius: BorderRadius.circular(12),
+                    color: AppColors.surface,
+                    child: Container(
+                      constraints: const BoxConstraints(maxHeight: 220),
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.primary.withValues(alpha: 0.4), width: 1.5),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.35),
+                            blurRadius: 15,
+                            offset: const Offset(0, 8),
+                          )
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.12),
+                              borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  '🔍 Matching Customers Found (${_filteredCustomers.length})',
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primary),
+                                ),
+                                const Text('Click to select customer details', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                              ],
+                            ),
+                          ),
+                          Flexible(
+                            child: ListView.separated(
+                              shrinkWrap: true,
+                              itemCount: _filteredCustomers.length,
+                              separatorBuilder: (_, _) => const Divider(color: AppColors.border, height: 1),
+                              itemBuilder: (context, index) {
+                                final cust = _filteredCustomers[index];
+                                return ListTile(
+                                  dense: true,
+                                  hoverColor: AppColors.primary.withValues(alpha: 0.08),
+                                  leading: const CircleAvatar(
+                                    radius: 14,
+                                    backgroundColor: Color(0xFFE6F4EA),
+                                    child: Icon(Icons.person, size: 14, color: AppColors.primary),
+                                  ),
+                                  title: Text(
+                                    cust.name,
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.textPrimary),
+                                  ),
+                                  subtitle: Text(
+                                    cust.phone.isNotEmpty ? '📱 ${cust.phone}' : 'No phone number',
+                                    style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                                  ),
+                                  trailing: cust.pendingBalance > 0
+                                      ? Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: Colors.orange.withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Text(
+                                            'Udhar: ₹${cust.pendingBalance.toStringAsFixed(0)}',
+                                            style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 11),
+                                          ),
+                                        )
+                                      : const Icon(Icons.north_west, size: 14, color: AppColors.textMuted),
+                                  onTap: () {
+                                    _selectCustomer(cust);
+                                    _custPhoneFocusNode.requestFocus();
+                                  },
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

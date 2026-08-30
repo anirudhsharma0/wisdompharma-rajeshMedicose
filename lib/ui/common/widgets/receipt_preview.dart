@@ -196,10 +196,10 @@ class ReceiptPreview extends StatelessWidget {
                   children: [
                     // Table Header Row
                     Container(
-                      color: Colors.grey.shade200,
                       padding: const EdgeInsets.symmetric(vertical: 4),
-                      decoration: const BoxDecoration(
-                        border: Border(
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade200,
+                        border: const Border(
                           top: BorderSide(color: Colors.black, width: 1),
                           bottom: BorderSide(color: Colors.black, width: 1),
                         ),

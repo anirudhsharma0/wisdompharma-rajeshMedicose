@@ -367,6 +367,26 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                   ),
                 ),
               ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(Icons.info_outline, size: 16, color: Colors.blue),
+                    SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Get a free Gemini API Key from: aistudio.google.com/app/apikey',
+                        style: TextStyle(fontSize: 11, color: Colors.blue),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
           actions: [
@@ -381,7 +401,10 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                 await BillOcrService.instance.saveApiKey(newKey);
                 if (!ctx.mounted) return;
                 Navigator.pop(ctx);
-                _showSnackBar('API Key updated successfully! Try scanning your bill now.');
+                _showSnackBar('API Key updated successfully! Retrying bill scan...');
+                if (_selectedPages.isNotEmpty) {
+                  _processImageScan();
+                }
               },
               child: const Text('Save Key', style: TextStyle(color: Colors.white)),
             ),
@@ -432,29 +455,48 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Row(
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final isMobile = constraints.maxWidth < 600;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(Icons.document_scanner_outlined, color: AppColors.teal, size: 24),
-                            SizedBox(width: 8),
-                            Text(
-                              'Scan Physical Purchase Bill / Photo',
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate800),
+                            Row(
+                              children: [
+                                const Icon(Icons.document_scanner_outlined, color: AppColors.teal, size: 24),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Scan Physical Purchase Bill / Photo',
+                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate800),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (_selectedPages.isNotEmpty && !isMobile)
+                                  Chip(
+                                    avatar: const Icon(Icons.pages, size: 16, color: Colors.white),
+                                    label: Text(
+                                      '${_selectedPages.length} Page${_selectedPages.length > 1 ? "s" : ""} Selected',
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                                    ),
+                                    backgroundColor: AppColors.teal,
+                                  ),
+                              ],
                             ),
+                            if (_selectedPages.isNotEmpty && isMobile) ...[
+                              const SizedBox(height: 6),
+                              Chip(
+                                avatar: const Icon(Icons.pages, size: 16, color: Colors.white),
+                                label: Text(
+                                  '${_selectedPages.length} Page${_selectedPages.length > 1 ? "s" : ""} Selected',
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                                ),
+                                backgroundColor: AppColors.teal,
+                              ),
+                            ],
                           ],
-                        ),
-                        if (_selectedPages.isNotEmpty)
-                          Chip(
-                            avatar: const Icon(Icons.pages, size: 16, color: Colors.white),
-                            label: Text(
-                              '${_selectedPages.length} Page${_selectedPages.length > 1 ? "s" : ""} Selected',
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
-                            ),
-                            backgroundColor: AppColors.teal,
-                          ),
-                      ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 6),
                     const Text(
@@ -673,51 +715,98 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _invoiceDateController,
-                              decoration: const InputDecoration(
-                                labelText: 'Invoice Date',
-                                border: OutlineInputBorder(),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final isMobile = constraints.maxWidth < 600;
+                          if (isMobile) {
+                            return Column(
+                              children: [
+                                TextField(
+                                  controller: _invoiceDateController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Invoice Date',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _billDiscountController,
+                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Bill Discount (%)',
+                                    border: OutlineInputBorder(),
+                                    suffixText: '%',
+                                  ),
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _scannedBill!.billDiscountPercent = double.tryParse(val) ?? 0.0;
+                                    });
+                                  },
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _grandTotalController,
+                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Grand Total (₹)',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _scannedBill!.grandTotal = double.tryParse(val) ?? 0.0;
+                                    });
+                                  },
+                                ),
+                              ],
+                            );
+                          }
+                          return Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _invoiceDateController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Invoice Date',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: TextField(
-                              controller: _billDiscountController,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              decoration: const InputDecoration(
-                                labelText: 'Bill Discount (%)',
-                                border: OutlineInputBorder(),
-                                suffixText: '%',
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: TextField(
+                                  controller: _billDiscountController,
+                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Bill Discount (%)',
+                                    border: OutlineInputBorder(),
+                                    suffixText: '%',
+                                  ),
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _scannedBill!.billDiscountPercent = double.tryParse(val) ?? 0.0;
+                                    });
+                                  },
+                                ),
                               ),
-                              onChanged: (val) {
-                                setState(() {
-                                  _scannedBill!.billDiscountPercent = double.tryParse(val) ?? 0.0;
-                                });
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: TextField(
-                              controller: _grandTotalController,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              decoration: const InputDecoration(
-                                labelText: 'Grand Total (₹)',
-                                border: OutlineInputBorder(),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: TextField(
+                                  controller: _grandTotalController,
+                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Grand Total (₹)',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  onChanged: (val) {
+                                    setState(() {
+                                      _scannedBill!.grandTotal = double.tryParse(val) ?? 0.0;
+                                    });
+                                  },
+                                ),
                               ),
-                              onChanged: (val) {
-                                setState(() {
-                                  _scannedBill!.grandTotal = double.tryParse(val) ?? 0.0;
-                                });
-                              },
-                            ),
-                          ),
-                        ],
+                            ],
+                          );
+                        },
                       ),
                       const SizedBox(height: 12),
                       // Calculation Engine Summary & Mode Toggle Card
@@ -734,19 +823,24 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                const Row(
-                                  children: [
-                                    Icon(Icons.document_scanner, color: AppColors.teal, size: 20),
-                                    SizedBox(width: 6),
-                                    Text(
-                                      'Exact Printed Paper Bill As-Is Mapping (0 Calculation Mismatch)',
-                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.teal),
-                                    ),
-                                  ],
+                                Expanded(
+                                  child: Row(
+                                    children: const [
+                                      Icon(Icons.document_scanner, color: AppColors.teal, size: 20),
+                                      SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          'Exact Paper Bill As-Is Mapping',
+                                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.teal),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                                 Row(
                                   children: [
-                                    const Text('Taxable Table Column', style: TextStyle(fontSize: 12)),
+                                    const Text('Taxable Column', style: TextStyle(fontSize: 11)),
                                     Switch(
                                       value: _scannedBill!.isAmountTaxable,
                                       activeThumbColor: AppColors.teal,
