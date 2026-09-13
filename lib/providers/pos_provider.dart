@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../data/models/bill_model.dart';
 import '../data/models/medicine_master_model.dart';
 import '../data/services/sqlite_service.dart';
@@ -19,8 +21,60 @@ class PosProvider extends ChangeNotifier {
 
   // Local storage fallback if Firebase is not initialized
   final List<BillModel> _localFallbackBills = [];
+  static const _offlineBillsKey = 'pos_offline_bill_queue_v1';
 
   DateTime? _billDate;
+
+  PosProvider() {
+    _initializeOfflineQueue();
+  }
+
+  Future<void> _initializeOfflineQueue() async {
+    await _loadOfflineBills();
+    await syncOfflineBills();
+  }
+
+  Future<void> _loadOfflineBills() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList(_offlineBillsKey) ?? const [];
+    _localFallbackBills.addAll(saved.map((raw) {
+      final map = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      return BillModel.fromMap(map, map['id']?.toString() ?? 'local_restored');
+    }));
+    if (saved.isNotEmpty) notifyListeners();
+  }
+
+  Future<void> _persistOfflineBills() async {
+    final prefs = await SharedPreferences.getInstance();
+    final serialized = _localFallbackBills.map((bill) {
+      final map = bill.toMap();
+      map['id'] = bill.id;
+      map['createdAt'] = bill.createdAt.toIso8601String();
+      return jsonEncode(map);
+    }).toList();
+    await prefs.setStringList(_offlineBillsKey, serialized);
+  }
+
+  /// Retries bills that were saved locally while the device was offline.
+  /// A bill stays in the queue until Firestore accepts it successfully.
+  Future<void> syncOfflineBills() async {
+    if (_localFallbackBills.isEmpty) return;
+    final synced = <BillModel>[];
+    for (final bill in _localFallbackBills) {
+      try {
+        final result = await FirebaseService.instance.createBill(bill);
+        if (result['success'] == true) synced.add(bill);
+      } catch (_) {
+        // Keep the remaining bills on-device for the next retry.
+        break;
+      }
+    }
+    if (synced.isNotEmpty) {
+      _localFallbackBills.removeWhere((bill) => synced.contains(bill));
+      await _persistOfflineBills();
+      notifyListeners();
+    }
+  }
 
   // Getters
   List<BillItem> get cartItems => _cartItems;
@@ -234,6 +288,9 @@ class PosProvider extends ChangeNotifier {
 
     try {
       final res = await FirebaseService.instance.createBill(bill);
+      if (res['success'] == false) {
+        return {'success': false, 'message': res['message'] ?? 'Bill could not be saved.'};
+      }
       final billId = res['id'] as String;
       final warnings = res['warnings'] as List<String>? ?? [];
 
@@ -254,6 +311,7 @@ class PosProvider extends ChangeNotifier {
       debugPrint('Firebase checkout failed, saving locally: $e');
       final offlineBill = bill.copyWith(id: 'local_${DateTime.now().millisecondsSinceEpoch}');
       _localFallbackBills.add(offlineBill);
+      await _persistOfflineBills();
       resetCart();
       return {
         'success': true,

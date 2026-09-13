@@ -54,7 +54,7 @@ class FirebaseService {
   // ================= BILLS API =================
 
   // Stream bills in real-time ordered by creation date descending with limit
-  Stream<List<BillModel>> streamBills({int limit = 100}) {
+  Stream<List<BillModel>> streamBills({int limit = 1000}) {
     return _billsRef
         .orderBy('createdAt', descending: true)
         .limit(limit)
@@ -68,6 +68,18 @@ class FirebaseService {
 
   // Create a new bill and push it to Firestore
   Future<Map<String, dynamic>> createBill(BillModel bill) async {
+    // Validate every exact batch before creating the bill. Never substitute a
+    // different batch merely because the medicine name matches.
+    for (final item in bill.items) {
+      final stockCheck = await _validateExactStock(item.medicineName, item.batchNumber, item.quantity);
+      if (!stockCheck) {
+        return {
+          'success': false,
+          'message': 'Insufficient or unavailable stock for ${item.medicineName} (Batch: ${item.batchNumber}).',
+        };
+      }
+    }
+
     final docRef = _billsRef.doc();
     final newBill = bill.copyWith(id: docRef.id);
     await docRef.set(newBill.toMap());
@@ -84,6 +96,7 @@ class FirebaseService {
 
     // Deduct stock for items in the bill using batch matching & transactions
     for (var item in bill.items) {
+      if (item.batchNumber.trim() == 'MANUAL') continue;
       final stockSuccess = await _deductInventoryStock(item.medicineName, item.batchNumber, item.quantity);
       if (!stockSuccess) {
         warnings.add('Stock deduction for "${item.medicineName}" (Batch: ${item.batchNumber}) could not be completed.');
@@ -91,9 +104,22 @@ class FirebaseService {
     }
 
     return {
+      'success': true,
       'id': docRef.id,
       'warnings': warnings,
     };
+  }
+
+  Future<bool> _validateExactStock(String name, String batchNumber, int quantity) async {
+    if (batchNumber.trim().isEmpty || batchNumber.trim() == 'MANUAL') return true;
+    final snap = await _inventoryRef
+        .where('medicineName', isEqualTo: name.trim())
+        .where('batchNumber', isEqualTo: batchNumber.trim())
+        .limit(1)
+        .get();
+    if (snap.docs.isEmpty) return false;
+    final available = ((snap.docs.first.data() as Map<String, dynamic>)['quantity'] as num?)?.toInt() ?? 0;
+    return available >= quantity;
   }
 
   // Internal helper to deduct stock from inventory with batch matching & atomic transactions
@@ -108,16 +134,8 @@ class FirebaseService {
       }
 
       final snap = await query.limit(1).get();
-      if (snap.docs.isEmpty) {
-        // Fallback to name-only match if exact batch doc is missing
-        final fallbackSnap = await _inventoryRef.where('medicineName', isEqualTo: cleanName).limit(1).get();
-        if (fallbackSnap.docs.isEmpty) return false;
-        final docRef = fallbackSnap.docs.first.reference;
-        return await _runDeductTransaction(docRef, qtyToDeduct);
-      } else {
-        final docRef = snap.docs.first.reference;
-        return await _runDeductTransaction(docRef, qtyToDeduct);
-      }
+      if (snap.docs.isEmpty) return false;
+      return await _runDeductTransaction(snap.docs.first.reference, qtyToDeduct);
     } catch (e) {
       debugPrint('Error updating inventory stock for $name (Batch: $batchNumber): $e');
       return false;
@@ -131,7 +149,10 @@ class FirebaseService {
         if (!snapshot.exists) return;
         final data = snapshot.data() as Map<String, dynamic>;
         final currentQty = (data['quantity'] as num?)?.toInt() ?? 0;
-        final newQty = (currentQty - qtyToDeduct).clamp(0, 9999999);
+        if (currentQty < qtyToDeduct) {
+          throw StateError('Insufficient stock for this batch.');
+        }
+        final newQty = currentQty - qtyToDeduct;
         transaction.update(docRef, {'quantity': newQty});
       });
       return true;
@@ -215,15 +236,20 @@ class FirebaseService {
 
   // Add a new inventory item or update if it exists
   Future<String> addInventoryItem(InventoryModel item) async {
-    // Check if item with same medicineName and batchNumber exists
+    // A batch bought from another supplier is a separate rate/stock record.
     final query = await _inventoryRef
         .where('medicineName', isEqualTo: item.medicineName)
         .where('batchNumber', isEqualTo: item.batchNumber)
-        .limit(1)
         .get();
 
-    if (query.docs.isNotEmpty) {
-      final doc = query.docs.first;
+    final matchingDoc = query.docs.cast<QueryDocumentSnapshot>().where((doc) {
+      final data = doc.data() as Map<String, dynamic>;
+      return (data['supplierName'] ?? '').toString().trim().toLowerCase() ==
+          item.supplierName.trim().toLowerCase();
+    }).firstOrNull;
+
+    if (matchingDoc != null) {
+      final doc = matchingDoc;
       final existingQty = (doc.data() as Map<String, dynamic>)['quantity'] ?? 0;
       final updatedItem = item.copyWith(
         id: doc.id,
@@ -559,7 +585,7 @@ class FirebaseService {
   }
 
   // Stream payments with limit
-  Stream<List<CustomerPaymentModel>> streamCustomerPayments({int limit = 100}) {
+  Stream<List<CustomerPaymentModel>> streamCustomerPayments({int limit = 1000}) {
     return _paymentsRef
         .orderBy('createdAt', descending: true)
         .limit(limit)
@@ -575,7 +601,7 @@ class FirebaseService {
 
   CollectionReference get _purchaseBillsRef => _storeRef.doc(storeId).collection('purchase_bills');
 
-  Stream<List<PurchaseBillModel>> streamPurchaseBills({int limit = 100}) {
+  Stream<List<PurchaseBillModel>> streamPurchaseBills({int limit = 1000}) {
     return _purchaseBillsRef
         .orderBy('createdAt', descending: true)
         .limit(limit)
@@ -612,7 +638,7 @@ class FirebaseService {
 
   CollectionReference get _vouchersRef => _storeRef.doc(storeId).collection('vouchers');
 
-  Stream<List<VoucherModel>> streamVouchers({int limit = 100}) {
+  Stream<List<VoucherModel>> streamVouchers({int limit = 1000}) {
     return _vouchersRef
         .orderBy('createdAt', descending: true)
         .limit(limit)

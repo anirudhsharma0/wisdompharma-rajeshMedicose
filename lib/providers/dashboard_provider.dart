@@ -469,7 +469,7 @@ class DashboardProvider extends ChangeNotifier {
     final cPhone = cust.phone.trim();
 
     final cBills = _bills.where((b) {
-      if (b.paymentMode != 'Credit') return false;
+      if (b.paymentMode != 'Credit' || b.status == 'CANCELLED') return false;
       final bName = b.customerName.trim().toLowerCase();
       final bPhone = b.customerPhone.trim();
       return (cPhone.isNotEmpty && bPhone == cPhone) ||
@@ -491,6 +491,8 @@ class DashboardProvider extends ChangeNotifier {
     final creditBillsTotal = cBills.fold(0.0, (sum, b) => sum + b.netAmount);
     final paymentsTotal = cPays.fold(0.0, (sum, p) => sum + p.amountPaid);
 
+    // pendingBalance is also updated when a transaction is written. Adding it
+    // here would count the same credit or payment twice.
     final calculated = creditBillsTotal - paymentsTotal;
     return calculated > 0 ? calculated : 0.0;
   }
@@ -506,14 +508,25 @@ class DashboardProvider extends ChangeNotifier {
              (sName.isNotEmpty && vName == sName);
     }).toList();
 
-    if (sVouchers.isEmpty) {
+    final supplierBills = _purchaseBills.where((bill) =>
+      bill.supplierName.trim().toLowerCase() == sName ||
+      (sPhone.isNotEmpty && bill.supplierPhone.trim() == sPhone)).toList();
+
+    if (sVouchers.isEmpty && supplierBills.isEmpty) {
       return sup.due;
     }
 
     final purchasesTotal = sVouchers.where((v) => v.type == 'PURCHASE').fold(0.0, (sum, v) => sum + v.amount);
     final paymentsTotal = sVouchers.where((v) => v.type == 'PAYMENT').fold(0.0, (sum, v) => sum + v.amount);
+    final voucherPurchaseNumbers = sVouchers
+      .where((v) => v.type == 'PURCHASE')
+      .map((v) => v.voucherNumber.trim().toLowerCase())
+      .toSet();
+    final billPurchasesTotal = supplierBills
+      .where((bill) => !voucherPurchaseNumbers.contains(bill.billNumber.trim().toLowerCase()))
+      .fold(0.0, (sum, bill) => sum + bill.totalAmount);
 
-    final calculated = purchasesTotal - paymentsTotal;
+    final calculated = purchasesTotal + billPurchasesTotal - paymentsTotal;
     return calculated > 0 ? calculated : 0.0;
   }
 
@@ -600,7 +613,10 @@ class DashboardProvider extends ChangeNotifier {
       await FirebaseService.instance.addInventoryItem(item);
     } else {
       // Mock update
-      final idx = _inventory.indexWhere((inv) => inv.medicineName == item.medicineName && inv.batchNumber == item.batchNumber);
+        final idx = _inventory.indexWhere((inv) =>
+          inv.medicineName == item.medicineName &&
+          inv.batchNumber == item.batchNumber &&
+          inv.supplierName.trim().toLowerCase() == item.supplierName.trim().toLowerCase());
       if (idx != -1) {
         _inventory[idx] = _inventory[idx].copyWith(quantity: _inventory[idx].quantity + item.quantity);
       } else {
@@ -712,7 +728,7 @@ class DashboardProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> collectCustomerPayment(
+  Future<bool> collectCustomerPayment(
     String customerId,
     double amount, {
     String paymentMode = 'Cash',
@@ -724,26 +740,31 @@ class DashboardProvider extends ChangeNotifier {
         (cust.id != null && cust.id!.toLowerCase() == cleanId) ||
         cust.name.trim().toLowerCase() == cleanId);
 
-    if (idx != -1) {
-      final cust = _customers[idx];
-      final currentBal = cust.pendingBalance;
-      final newBal = (currentBal - amount).clamp(0.0, 9999999.0);
-      _customers[idx] = cust.copyWith(pendingBalance: newBal);
-      _saveOfflineCustomers();
-      notifyListeners();
-    }
-
     if (_firebaseActive) {
-      FirebaseService.instance.clearCustomerBalance(
+      final success = await FirebaseService.instance.clearCustomerBalance(
         customerId,
         amount,
         paymentMode: paymentMode,
         referenceNumber: referenceNumber,
         remarks: remarks,
-      ).catchError((e) {
-        debugPrint('Error syncing customer payment to Firebase: $e');
-        return false;
-      });
+      );
+      if (!success) return false;
+
+      if (idx != -1) {
+        final cust = _customers[idx];
+        final now = DateTime.now();
+        _customerPayments.insert(0, CustomerPaymentModel(
+          id: 'pending_pay_${now.microsecondsSinceEpoch}',
+          customerId: cust.id ?? customerId,
+          customerName: cust.name,
+          customerPhone: cust.phone,
+          amountPaid: amount,
+          createdAt: now,
+        ));
+        _saveOfflineCustomers();
+        notifyListeners();
+      }
+      return true;
     } else {
       // Offline-only: add to local payments list
       final cust = idx != -1 ? _customers[idx] : null;
@@ -761,8 +782,10 @@ class DashboardProvider extends ChangeNotifier {
           ),
         );
         notifyListeners();
+        return true;
       }
     }
+    return false;
   }
 
   Future<void> addCustomerSale(
@@ -988,8 +1011,6 @@ class DashboardProvider extends ChangeNotifier {
       }
 
       final newDue = (sup.due - amount).clamp(0.0, 9999999.0);
-      _suppliers[idx] = sup.copyWith(due: newDue);
-
       final voucher = VoucherModel(
         voucherNumber: vNumber,
         type: 'PAYMENT',
@@ -1003,16 +1024,23 @@ class DashboardProvider extends ChangeNotifier {
         createdAt: DateTime.now(),
       );
 
-      _vouchers.insert(0, voucher);
-      notifyListeners();
-
       if (_firebaseActive) {
-        FirebaseService.instance.createVoucher(voucher).catchError((e) {
+        try {
+          final voucherId = await FirebaseService.instance.createVoucher(voucher);
+          final syncedVoucher = voucher.copyWith(id: voucherId);
+          _vouchers.insert(0, syncedVoucher);
+          notifyListeners();
+          return syncedVoucher;
+        } catch (e) {
           debugPrint('Error syncing payment voucher to Firebase: $e');
-          return '';
-        });
+          return null;
+        }
+      } else {
+        _suppliers[idx] = sup.copyWith(due: newDue);
+        _vouchers.insert(0, voucher);
+        notifyListeners();
+        return voucher;
       }
-      return voucher;
     }
     return null;
   }
@@ -1024,6 +1052,7 @@ class DashboardProvider extends ChangeNotifier {
     String remarks = '',
     String paymentMode = 'Credit',
     String partyPhone = '',
+    DateTime? billDate,
   }) async {
     final cleanId = supplierId.trim().toLowerCase();
     final idx = _suppliers.indexWhere((sup) =>
@@ -1060,7 +1089,7 @@ class DashboardProvider extends ChangeNotifier {
         referenceNumber: billNumber,
         category: 'Stock Purchase',
         remarks: remarks.isNotEmpty ? remarks : 'Stock Bill Added',
-        createdAt: DateTime.now(),
+        createdAt: billDate ?? DateTime.now(),
       );
 
       _vouchers.insert(0, voucher);

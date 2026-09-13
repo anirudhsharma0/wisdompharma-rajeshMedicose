@@ -90,6 +90,32 @@ class PartiesScreen extends StatefulWidget {
 }
 
 class _PartiesScreenState extends State<PartiesScreen> {
+  static DateTime parseFlexibleDate(String input) {
+    final clean = input.trim();
+    if (clean.isEmpty) return DateTime.now();
+
+    try {
+      final isoParsed = DateTime.tryParse(clean);
+      if (isoParsed != null) return isoParsed;
+
+      final separator = clean.contains('/') ? '/' : (clean.contains('-') ? '-' : null);
+      if (separator != null) {
+        final parts = clean.split(separator);
+        if (parts.length == 3) {
+          int day = int.parse(parts[0]);
+          int month = int.parse(parts[1]);
+          int year = int.parse(parts[2]);
+          if (year < 100) year += 2000;
+          return DateTime(year, month, day);
+        }
+      }
+    } catch (e) {
+      debugPrint('Date parsing exception for "$input": $e');
+    }
+
+    return DateTime.now();
+  }
+
   String _partySearchQuery = '';
   String _transactionSearchQuery = '';
   String _selectedCategoryFilter = 'ALL'; // 'ALL', 'SUPPLIERS', 'CUSTOMERS'
@@ -772,15 +798,16 @@ class _PartiesScreenState extends State<PartiesScreen> {
                   return;
                 }
 
+                var recorded = true;
                 if (isPaymentOut) {
                   if (party.partyType == 'Supplier') {
-                    await provider.paySupplier(
+                    recorded = await provider.paySupplier(
                       party.id,
                       amt,
                       paymentMode: payMode,
                       referenceNumber: refCtrl.text.trim(),
                       remarks: remarkCtrl.text.trim().isNotEmpty ? remarkCtrl.text.trim() : 'Paid to ${party.name}',
-                    );
+                    ) != null;
                   } else {
                     await provider.addVoucher(VoucherModel(
                       voucherNumber: 'PAY-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
@@ -797,7 +824,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
                   }
                 } else {
                   if (party.partyType == 'Customer') {
-                    await provider.collectCustomerPayment(
+                    recorded = await provider.collectCustomerPayment(
                       party.id,
                       amt,
                       paymentMode: payMode,
@@ -820,6 +847,14 @@ class _PartiesScreenState extends State<PartiesScreen> {
                   }
                 }
 
+                if (!recorded) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Transaction save nahi hui. Customer/Supplier sync check karein.')),
+                    );
+                  }
+                  return;
+                }
                 if (!context.mounted) return;
                 Navigator.pop(ctx);
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -1146,10 +1181,27 @@ class _PartiesScreenState extends State<PartiesScreen> {
                       Expanded(
                         child: TextField(
                           controller: invDateCtrl,
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             labelText: 'Invoice Date',
                             hintText: 'e.g. 30/07/2026',
-                            prefixIcon: Icon(Icons.calendar_today, size: 18),
+                            prefixIcon: const Icon(Icons.calendar_today, size: 18),
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.event, size: 18),
+                              tooltip: 'Select Date',
+                              onPressed: () async {
+                                final currentParsed = parseFlexibleDate(invDateCtrl.text);
+                                final picked = await showDatePicker(
+                                  context: context,
+                                  initialDate: currentParsed,
+                                  firstDate: DateTime(2000),
+                                  lastDate: DateTime(2035),
+                                );
+                                if (picked != null) {
+                                  invDateCtrl.text = DateFormat('dd/MM/yyyy').format(picked);
+                                  setDialogState(() {});
+                                }
+                              },
+                            ),
                           ),
                         ),
                       ),
@@ -1659,12 +1711,13 @@ class _PartiesScreenState extends State<PartiesScreen> {
                     };
                   }).where((i) => (i['medicineName'] as String).isNotEmpty).toList();
 
+                  final parsedBillDate = parseFlexibleDate(invDateCtrl.text);
                   final pendingDue = (totalBillAmount - paidAmt).clamp(0.0, 9999999.0);
                   await provider.addPurchaseBill(PurchaseBillModel(
                     billNumber: invNo,
                     supplierName: party.name,
                     supplierPhone: party.phone,
-                    billDate: DateTime.tryParse(invDateCtrl.text.trim()) ?? DateTime.now(),
+                    billDate: parsedBillDate,
                     itemsCount: purchaseItems.length,
                     totalAmount: totalBillAmount,
                     paidAmount: paidAmt,
@@ -1672,7 +1725,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
                     paymentMode: selectedMode,
                     receiptNo: rcptNoCtrl.text.trim().isNotEmpty ? rcptNoCtrl.text.trim() : invNo,
                     items: purchaseItems,
-                    createdAt: DateTime.now(),
+                    createdAt: parsedBillDate,
                     itemsSubtotal: (initialScannedBill != null && initialScannedBill.itemsSubtotal > 0)
                         ? initialScannedBill.itemsSubtotal
                         : totalSubTotal,
@@ -1701,6 +1754,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
                       remarks: detailedRemarks,
                       paymentMode: mode,
                       partyPhone: party.phone,
+                      billDate: parsedBillDate,
                     );
                   } else {
                     await provider.addVoucher(VoucherModel(
@@ -1713,7 +1767,7 @@ class _PartiesScreenState extends State<PartiesScreen> {
                       category: 'Stock Purchase',
                       referenceNumber: invNo,
                       remarks: detailedRemarks,
-                      createdAt: DateTime.now(),
+                      createdAt: parsedBillDate,
                     ));
                   }
 

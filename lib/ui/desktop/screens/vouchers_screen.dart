@@ -676,10 +676,8 @@ class _VouchersScreenState extends State<VouchersScreen> {
                                               ElevatedButton(
                                                 style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
                                                 onPressed: () {
-                                                  if (voucher.id != null) {
-                                                    dashProvider.deleteVoucher(voucher.id!);
-                                                  }
-                                                  Navigator.pop(ctx);
+                                                   dashProvider.deleteVoucher(voucher);
+                                                   Navigator.pop(ctx);
                                                 },
                                                 child: const Text('Delete'),
                                               ),

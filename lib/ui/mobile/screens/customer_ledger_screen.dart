@@ -132,7 +132,12 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
               }
 
               Navigator.pop(context);
-              await provider.collectCustomerPayment(customer.id!, amount);
+              final recorded = await provider.collectCustomerPayment(customer.id ?? customer.name, amount);
+              if (!recorded && context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Payment save nahi hui. Internet aur customer sync check karein.')),
+                );
+              }
             },
           ),
         ],
@@ -458,7 +463,8 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
   }
 
   void _paySupplierDialog(BuildContext context, SupplierModel supplier, DashboardProvider provider) {
-    final amountController = TextEditingController(text: supplier.due > 0 ? supplier.due.toStringAsFixed(2) : '');
+    final supplierDue = provider.getSupplierPendingDue(supplier);
+    final amountController = TextEditingController(text: supplierDue > 0 ? supplierDue.toStringAsFixed(2) : '');
     final refController = TextEditingController();
     final remarksController = TextEditingController();
     String selectedMode = 'Cash';
@@ -507,7 +513,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
                               const Text('Pending Due', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
-                              Text('₹${supplier.due.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.error, fontWeight: FontWeight.bold, fontSize: 15)),
+                              Text('₹${supplierDue.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.error, fontWeight: FontWeight.bold, fontSize: 15)),
                             ],
                           ),
                         ],
@@ -615,8 +621,14 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                         remarks: remarks,
                       );
 
+                      if (voucher == null && context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Payment save nahi hui. Internet aur supplier sync check karein.')),
+                        );
+                      }
+
                       if (shouldPrint && voucher != null) {
-                        final remBal = (supplier.due - amt).clamp(0.0, 9999999.0);
+                        final remBal = (supplierDue - amt).clamp(0.0, 9999999.0);
                         final pdfBytes = await PdfService.generatePaymentReceiptPdf(
                           voucherNumber: voucher.voucherNumber,
                           partyName: supplier.name,
@@ -654,6 +666,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
   }
 
   void _addSupplierPurchaseDialog(BuildContext context, SupplierModel supplier, DashboardProvider provider) {
+    final supplierDue = provider.getSupplierPendingDue(supplier);
     final amountController = TextEditingController();
     final billNoController = TextEditingController();
     final remarksController = TextEditingController();
@@ -702,7 +715,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                   children: [
                     const Text('Current Pending Due:', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
                     Text(
-                      '₹${supplier.due.toStringAsFixed(2)}',
+                      '₹${supplierDue.toStringAsFixed(2)}',
                       style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 16),
                     ),
                   ],
@@ -802,6 +815,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
               (s) => s.id == supplier.id || s.name.toLowerCase() == supplier.name.toLowerCase(),
               orElse: () => supplier,
             );
+            final supplierDue = provider.getSupplierPendingDue(latestSup);
 
             final supplierVouchers = provider.vouchers.where((v) =>
               (v.partyName.trim().toLowerCase() == latestSup.name.trim().toLowerCase()) ||
@@ -877,12 +891,12 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                             decoration: BoxDecoration(
-                              gradient: latestSup.due > 0
+                              gradient: supplierDue > 0
                                   ? LinearGradient(colors: [Colors.blue.shade900.withValues(alpha: 0.3), Colors.blue.shade800.withValues(alpha: 0.1)])
                                   : LinearGradient(colors: [Colors.green.shade900.withValues(alpha: 0.3), Colors.green.shade800.withValues(alpha: 0.1)]),
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(
-                                color: latestSup.due > 0 ? Colors.blue.shade400 : AppColors.success.withValues(alpha: 0.4),
+                                color: supplierDue > 0 ? Colors.blue.shade400 : AppColors.success.withValues(alpha: 0.4),
                               ),
                             ),
                             child: Row(
@@ -897,17 +911,17 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      latestSup.due > 0 ? 'Payable to Supplier' : 'No Outstanding Balance',
-                                      style: TextStyle(fontSize: 11, color: latestSup.due > 0 ? Colors.blue.shade200 : Colors.green.shade200),
+                                      supplierDue > 0 ? 'Payable to Supplier' : 'No Outstanding Balance',
+                                      style: TextStyle(fontSize: 11, color: supplierDue > 0 ? Colors.blue.shade200 : Colors.green.shade200),
                                     ),
                                   ],
                                 ),
                                 Text(
-                                  '₹${latestSup.due.toStringAsFixed(2)}',
+                                  '₹${supplierDue.toStringAsFixed(2)}',
                                   style: TextStyle(
                                     fontSize: 22,
                                     fontWeight: FontWeight.w900,
-                                    color: latestSup.due > 0 ? Colors.blue.shade300 : AppColors.success,
+                                    color: supplierDue > 0 ? Colors.blue.shade300 : AppColors.success,
                                   ),
                                 ),
                               ],
@@ -1476,8 +1490,9 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
     final filteredSuppliers = dashProvider.suppliers.where((sup) {
       final query = _searchController.text.toLowerCase().trim();
       final matchesQuery = query.isEmpty || sup.name.toLowerCase().contains(query) || sup.contact.contains(query);
-      if (_filterTab == 'DUE') return matchesQuery && sup.due > 0;
-      if (_filterTab == 'CLEAR') return matchesQuery && sup.due == 0;
+      final supplierDue = dashProvider.getSupplierPendingDue(sup);
+      if (_filterTab == 'DUE') return matchesQuery && supplierDue > 0;
+      if (_filterTab == 'CLEAR') return matchesQuery && supplierDue == 0;
       return matchesQuery;
     }).toList();
 
@@ -1853,9 +1868,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                                               ElevatedButton(
                                                 style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
                                                 onPressed: () {
-                                                  if (customer.id != null) {
-                                                    dashProvider.deleteCustomer(customer.id!);
-                                                  }
+                                                  dashProvider.deleteCustomer(customer.id ?? customer.name);
                                                   Navigator.pop(ctx);
                                                   ScaffoldMessenger.of(context).showSnackBar(
                                                     SnackBar(content: Text('Client ${customer.name} removed.')),
@@ -1889,7 +1902,8 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final supplier = filteredSuppliers[index];
-                  final hasDue = supplier.due > 0;
+                  final supplierDue = dashProvider.getSupplierPendingDue(supplier);
+                  final hasDue = supplierDue > 0;
 
                   return Container(
                     margin: const EdgeInsets.only(bottom: 10),
@@ -1954,7 +1968,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
                                 Text(
-                                  '₹${supplier.due.toStringAsFixed(2)}',
+                                  '₹${supplierDue.toStringAsFixed(2)}',
                                   style: TextStyle(
                                     color: hasDue ? Colors.blue.shade700 : AppColors.primaryDark,
                                     fontWeight: FontWeight.w900,
@@ -1979,9 +1993,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                                               ElevatedButton(
                                                 style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
                                                 onPressed: () {
-                                                  if (supplier.id != null) {
-                                                    dashProvider.deleteSupplier(supplier.id!);
-                                                  }
+                                                  dashProvider.deleteSupplier(supplier.id ?? supplier.name);
                                                   Navigator.pop(ctx);
                                                   ScaffoldMessenger.of(context).showSnackBar(
                                                     SnackBar(content: Text('Supplier ${supplier.name} removed.')),

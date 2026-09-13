@@ -782,6 +782,27 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                       supplierId = createdSup.id ?? supName;
                     }
 
+                    DateTime parsedBillDate = DateTime.now();
+                    try {
+                      final raw = billDateController.text.trim();
+                      final iso = DateTime.tryParse(raw);
+                      if (iso != null) {
+                        parsedBillDate = iso;
+                      } else {
+                        final sep = raw.contains('/') ? '/' : (raw.contains('-') ? '-' : null);
+                        if (sep != null) {
+                          final parts = raw.split(sep);
+                          if (parts.length == 3) {
+                            int d = int.parse(parts[0]);
+                            int m = int.parse(parts[1]);
+                            int y = int.parse(parts[2]);
+                            if (y < 100) y += 2000;
+                            parsedBillDate = DateTime(y, m, d);
+                          }
+                        }
+                      }
+                    } catch (_) {}
+
                     // Log purchase bill in supplier ledger if pending due > 0
                     if (pendingDue > 0) {
                       await provider.addSupplierPurchase(
@@ -790,6 +811,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                         billNumber: billNo,
                         remarks: 'Bill $billNo total ₹$totalInvoiceAmount (Paid ₹$paidNow)',
                         paymentMode: paymentMode,
+                        billDate: parsedBillDate,
                       );
                     }
 
@@ -809,7 +831,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                       billNumber: billNo,
                       supplierName: supName,
                       supplierPhone: supplierPhone,
-                      billDate: DateTime.tryParse(billDateController.text.trim()) ?? DateTime.now(),
+                      billDate: parsedBillDate,
                       itemsCount: billItems.length,
                       totalAmount: totalInvoiceAmount,
                       paidAmount: paidNow,
@@ -817,7 +839,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                       paymentMode: paymentMode,
                       receiptNo: receiptNo,
                       items: billItems,
-                      createdAt: DateTime.now(),
+                      createdAt: parsedBillDate,
                     ));
 
                     // 4. Optionally Print Supplier Payment Receipt Slip
@@ -876,7 +898,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     }).toList();
 
     final totalPurchaseSum = purchaseBills.fold(0.0, (sum, b) => sum + b.totalAmount);
-    final totalDueSum = suppliers.fold(0.0, (sum, s) => sum + s.due);
+    final totalDueSum = suppliers.fold(0.0, (sum, s) => sum + provider.getSupplierPendingDue(s));
 
     return Padding(
       padding: const EdgeInsets.all(24.0),
@@ -1304,7 +1326,8 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
   }
 
   void _showPaySupplierDialog(BuildContext context, DashboardProvider provider, SupplierModel supplier) {
-    final amountController = TextEditingController(text: supplier.due > 0 ? supplier.due.toStringAsFixed(2) : '');
+    final supplierDue = provider.getSupplierPendingDue(supplier);
+    final amountController = TextEditingController(text: supplierDue > 0 ? supplierDue.toStringAsFixed(2) : '');
     final refController = TextEditingController();
     final remarksController = TextEditingController();
     String selectedMode = 'Cash';
@@ -1352,7 +1375,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
                               const Text('Pending Due', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
-                              Text('₹${supplier.due.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.error, fontWeight: FontWeight.bold, fontSize: 15)),
+                              Text('₹${supplierDue.toStringAsFixed(2)}', style: const TextStyle(color: AppColors.error, fontWeight: FontWeight.bold, fontSize: 15)),
                             ],
                           ),
                         ],
@@ -1466,7 +1489,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                     final refNo = refController.text.trim();
                     final remarks = remarksController.text.trim();
                     final voucher = await provider.paySupplier(
-                      supplier.id!,
+                      supplier.id ?? supplier.name,
                       amt,
                       paymentMode: selectedMode,
                       referenceNumber: refNo,
@@ -1483,7 +1506,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                     );
 
                     if (printReceipt && voucher != null) {
-                      final remBal = (supplier.due - amt).clamp(0.0, 9999999.0);
+                      final remBal = (supplierDue - amt).clamp(0.0, 9999999.0);
                       final pdfBytes = await PdfService.generatePaymentReceiptPdf(
                         voucherNumber: voucher.voucherNumber,
                         partyName: supplier.name,
@@ -1528,7 +1551,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
           (sup.gstin != null && sup.gstin!.toLowerCase().contains(q));
     }).toList();
 
-    final totalDue = suppliers.fold(0.0, (sum, sup) => sum + sup.due);
+    final totalDue = suppliers.fold(0.0, (sum, sup) => sum + provider.getSupplierPendingDue(sup));
 
     return Padding(
       padding: const EdgeInsets.all(24.0),
@@ -1610,6 +1633,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                           DataColumn(label: Text('Actions', style: TextStyle(fontWeight: FontWeight.bold))),
                         ],
                         rows: filteredSuppliers.map((sup) {
+                          final supplierDue = provider.getSupplierPendingDue(sup);
                           return DataRow(
                             cells: [
                               DataCell(
@@ -1627,13 +1651,13 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                               DataCell(Text(sup.gstin ?? 'N/A', style: const TextStyle(fontSize: 12))),
                               DataCell(Text('${sup.orders} Orders', style: const TextStyle(fontWeight: FontWeight.w500))),
                               DataCell(Text(
-                                '₹${sup.due.toStringAsFixed(2)}',
-                                style: TextStyle(fontWeight: FontWeight.bold, color: sup.due > 0 ? AppColors.error : AppColors.success),
+                                '₹${supplierDue.toStringAsFixed(2)}',
+                                style: TextStyle(fontWeight: FontWeight.bold, color: supplierDue > 0 ? AppColors.error : AppColors.success),
                               )),
                               DataCell(
                                 Row(
                                   children: [
-                                    if (sup.due > 0) ...[
+                                    if (supplierDue > 0) ...[
                                       ElevatedButton.icon(
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: AppColors.success,
@@ -1659,9 +1683,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                                               ElevatedButton(
                                                 style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
                                                 onPressed: () {
-                                                  if (sup.id != null) {
-                                                    provider.deleteSupplier(sup.id!);
-                                                  }
+                                                  provider.deleteSupplier(sup.id ?? sup.name);
                                                   Navigator.pop(ctx);
                                                   ScaffoldMessenger.of(context).showSnackBar(
                                                     SnackBar(content: Text('Supplier ${sup.name} removed.')),

@@ -185,7 +185,7 @@ class ScannedBillModel {
     required this.items,
     DateTime? scannedAt,
     this.status = 'pending',
-    this.isAmountTaxable = false,
+    this.isAmountTaxable = true,
   })  : id = id ?? 'sb_${DateTime.now().millisecondsSinceEpoch}',
         scannedAt = scannedAt ?? DateTime.now();
 
@@ -291,7 +291,7 @@ class ScannedBillModel {
       items: parsedItems,
       scannedAt: json['scannedAt'] != null ? DateTime.tryParse(json['scannedAt'].toString()) : null,
       status: json['status']?.toString() ?? 'pending',
-      isAmountTaxable: json['isAmountTaxable'] == true,
+      isAmountTaxable: json['isAmountTaxable'] == null ? true : json['isAmountTaxable'] == true,
     );
 
     if (bill.grandTotal <= 0 && bill.items.isNotEmpty) {
@@ -328,7 +328,6 @@ class BillOcrService {
   static final BillOcrService instance = BillOcrService._internal();
   BillOcrService._internal();
 
-  static const String _defaultApiKey = String.fromEnvironment('GEMINI_API_KEY', defaultValue: '');
   static const String _prefApiKey = 'gemini_ocr_api_key';
   static const String _prefPendingBills = 'pending_scanned_bills_queue';
 
@@ -425,8 +424,7 @@ class BillOcrService {
       debugPrint('Using saved API key from preferences (ends with: ...${saved.trim().length > 6 ? saved.trim().substring(saved.trim().length - 6) : saved.trim()})');
       return saved.trim();
     }
-    debugPrint('Using default API key from code.');
-    return _defaultApiKey;
+    throw StateError('Gemini API key is not configured. Add it in Scanner Settings.');
   }
 
   Future<void> saveApiKey(String newKey) async {
@@ -489,7 +487,7 @@ Required JSON Structure (Return ONLY raw valid JSON text, no markdown backticks,
   "printedCgst": 96.58,
   "printedSgst": 96.58,
   "printedRoundOff": 0.0,
-  "isAmountTaxable": false,
+  "isAmountTaxable": true,
   "items": [
     {
       "srNo": 1,
@@ -626,7 +624,7 @@ Required JSON Structure (Return ONLY raw valid JSON text, no markdown backticks,
   "printedCgst": 4.28,
   "printedSgst": 4.28,
   "printedRoundOff": -0.28,
-  "isAmountTaxable": false,
+  "isAmountTaxable": true,
   "items": [
     {
       "srNo": 1,

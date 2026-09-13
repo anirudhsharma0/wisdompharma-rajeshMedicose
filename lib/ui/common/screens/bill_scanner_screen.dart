@@ -314,7 +314,13 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
   }
 
   void _showApiKeyDialog({bool autoTriggeredByError = false}) async {
-    final currentKey = await BillOcrService.instance.getApiKey();
+    // Safely get the current key — getApiKey() throws if no key is configured, so we catch that
+    String currentKey = '';
+    try {
+      currentKey = await BillOcrService.instance.getApiKey();
+    } catch (_) {
+      currentKey = ''; // No key set yet — dialog will show empty field
+    }
     final keyController = TextEditingController(text: currentKey);
     bool obscure = true;
 
@@ -429,6 +435,11 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
       appBar: AppBar(
         title: const Text('📷 AI Purchase Bill Scanner & Excel Converter'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.vpn_key_outlined, color: Colors.white70, size: 24),
+            tooltip: 'Set Gemini API Key (Scanner Settings)',
+            onPressed: () => _showApiKeyDialog(),
+          ),
           IconButton(
             icon: const Icon(Icons.playlist_add_check_circle, color: Colors.amberAccent, size: 28),
             tooltip: 'Admin Pending Scanned Bills',
@@ -588,30 +599,64 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Bill Pages Preview (${_selectedPages.length} Attached)',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate800),
-                          ),
-                          Row(
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final isMobile = constraints.maxWidth < 600;
+                          if (isMobile) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Bill Pages Preview (${_selectedPages.length} Attached)',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate800),
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    TextButton.icon(
+                                      icon: const Icon(Icons.refresh, size: 16),
+                                      label: Text('Scan All (${_selectedPages.length})'),
+                                      style: TextButton.styleFrom(foregroundColor: AppColors.teal),
+                                      onPressed: _processImageScan,
+                                    ),
+                                    TextButton.icon(
+                                      icon: const Icon(Icons.clear_all, size: 16),
+                                      label: const Text('Clear All'),
+                                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                      onPressed: _clearAllPages,
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            );
+                          }
+                          return Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              TextButton.icon(
-                                icon: const Icon(Icons.refresh, size: 16),
-                                label: Text('Scan All (${_selectedPages.length}) Pages'),
-                                style: TextButton.styleFrom(foregroundColor: AppColors.teal),
-                                onPressed: _processImageScan,
+                              Text(
+                                'Bill Pages Preview (${_selectedPages.length} Attached)',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.slate800),
                               ),
-                              TextButton.icon(
-                                icon: const Icon(Icons.clear_all, size: 16),
-                                label: const Text('Clear All'),
-                                style: TextButton.styleFrom(foregroundColor: Colors.red),
-                                onPressed: _clearAllPages,
+                              Row(
+                                children: [
+                                  TextButton.icon(
+                                    icon: const Icon(Icons.refresh, size: 16),
+                                    label: Text('Scan All (${_selectedPages.length}) Pages'),
+                                    style: TextButton.styleFrom(foregroundColor: AppColors.teal),
+                                    onPressed: _processImageScan,
+                                  ),
+                                  TextButton.icon(
+                                    icon: const Icon(Icons.clear_all, size: 16),
+                                    label: const Text('Clear All'),
+                                    style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                    onPressed: _clearAllPages,
+                                  ),
+                                ],
                               ),
                             ],
-                          ),
-                        ],
+                          );
+                        },
                       ),
                       const SizedBox(height: 8),
                       SizedBox(
@@ -691,28 +736,54 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                         style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.slate800),
                       ),
                       const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _supplierController,
-                              decoration: const InputDecoration(
-                                labelText: 'Supplier / Agency Name',
-                                border: OutlineInputBorder(),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final isMobile = constraints.maxWidth < 600;
+                          if (isMobile) {
+                            return Column(
+                              children: [
+                                TextField(
+                                  controller: _supplierController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Supplier / Agency Name',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _invoiceNoController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Invoice Number',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
+                              ],
+                            );
+                          }
+                          return Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _supplierController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Supplier / Agency Name',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: TextField(
-                              controller: _invoiceNoController,
-                              decoration: const InputDecoration(
-                                labelText: 'Invoice Number',
-                                border: OutlineInputBorder(),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: TextField(
+                                  controller: _invoiceNoController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Invoice Number',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
+                            ],
+                          );
+                        },
                       ),
                       const SizedBox(height: 12),
                       LayoutBuilder(
@@ -820,116 +891,249 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                  child: Row(
-                                    children: const [
-                                      Icon(Icons.document_scanner, color: AppColors.teal, size: 20),
-                                      SizedBox(width: 6),
-                                      Expanded(
-                                        child: Text(
-                                          'Exact Paper Bill As-Is Mapping',
-                                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.teal),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                final isMobile = constraints.maxWidth < 600;
+                                if (isMobile) {
+                                  return Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: const [
+                                          Icon(Icons.document_scanner, color: AppColors.teal, size: 20),
+                                          SizedBox(width: 6),
+                                          Expanded(
+                                            child: Text(
+                                              'Exact Paper Bill As-Is Mapping',
+                                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.teal),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          const Text('Taxable Column', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                          Switch(
+                                            value: _scannedBill!.isAmountTaxable,
+                                            activeThumbColor: AppColors.teal,
+                                            onChanged: (val) {
+                                              setState(() {
+                                                _scannedBill!.isAmountTaxable = val;
+                                                for (var item in _scannedBill!.items) {
+                                                  item.netAmount = val ? item.taxableAmount : item.calculatedNet;
+                                                }
+                                              });
+                                            },
+                                          ),
+                                        ],
                                       ),
                                     ],
-                                  ),
-                                ),
-                                Row(
+                                  );
+                                }
+                                return Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
-                                    const Text('Taxable Column', style: TextStyle(fontSize: 11)),
-                                    Switch(
-                                      value: _scannedBill!.isAmountTaxable,
-                                      activeThumbColor: AppColors.teal,
+                                    Expanded(
+                                      child: Row(
+                                        children: const [
+                                          Icon(Icons.document_scanner, color: AppColors.teal, size: 20),
+                                          SizedBox(width: 6),
+                                          Expanded(
+                                            child: Text(
+                                              'Exact Paper Bill As-Is Mapping',
+                                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.teal),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Row(
+                                      children: [
+                                        const Text('Taxable Column', style: TextStyle(fontSize: 11)),
+                                        Switch(
+                                          value: _scannedBill!.isAmountTaxable,
+                                          activeThumbColor: AppColors.teal,
+                                          onChanged: (val) {
+                                            setState(() {
+                                              _scannedBill!.isAmountTaxable = val;
+                                              for (var item in _scannedBill!.items) {
+                                                item.netAmount = val ? item.taxableAmount : item.calculatedNet;
+                                              }
+                                            });
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                            const Divider(),
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                final isMobile = constraints.maxWidth < 600;
+                                if (isMobile) {
+                                  final halfWidth = (constraints.maxWidth - 12) / 2;
+                                  return Wrap(
+                                    spacing: 4,
+                                    runSpacing: 6,
+                                    children: [
+                                      _buildEditableSummaryField(
+                                        label: 'Subtotal (₹)',
+                                        controller: _subtotalController,
+                                        width: halfWidth,
+                                        onChanged: (val) {
+                                          setState(() {
+                                            _scannedBill!.printedSubtotal = double.tryParse(val) ?? 0.0;
+                                          });
+                                        },
+                                      ),
+                                      _buildEditableSummaryField(
+                                        label: 'Bill Disc (₹)',
+                                        controller: _printedDiscountController,
+                                        color: Colors.red.shade700,
+                                        width: halfWidth,
+                                        onChanged: (val) {
+                                          setState(() {
+                                            final dis = double.tryParse(val) ?? 0.0;
+                                            _scannedBill!.printedDiscount = dis;
+                                            _scannedBill!.billDiscountAmount = dis;
+                                          });
+                                        },
+                                      ),
+                                      _buildEditableSummaryField(
+                                        label: 'Net Taxable (₹)',
+                                        controller: _taxableController,
+                                        width: halfWidth,
+                                        onChanged: (val) {
+                                          setState(() {
+                                            _scannedBill!.printedTaxable = double.tryParse(val) ?? 0.0;
+                                          });
+                                        },
+                                      ),
+                                      _buildEditableSummaryField(
+                                        label: 'CGST (₹)',
+                                        controller: _cgstController,
+                                        width: halfWidth,
+                                        onChanged: (val) {
+                                          setState(() {
+                                            _scannedBill!.printedCgst = double.tryParse(val) ?? 0.0;
+                                          });
+                                        },
+                                      ),
+                                      _buildEditableSummaryField(
+                                        label: 'SGST (₹)',
+                                        controller: _sgstController,
+                                        width: halfWidth,
+                                        onChanged: (val) {
+                                          setState(() {
+                                            _scannedBill!.printedSgst = double.tryParse(val) ?? 0.0;
+                                          });
+                                        },
+                                      ),
+                                      _buildEditableSummaryField(
+                                        label: 'Round Off (₹)',
+                                        controller: _roundOffController,
+                                        color: Colors.orange.shade800,
+                                        width: halfWidth,
+                                        onChanged: (val) {
+                                          setState(() {
+                                            _scannedBill!.printedRoundOff = double.tryParse(val) ?? 0.0;
+                                          });
+                                        },
+                                      ),
+                                      _buildEditableSummaryField(
+                                        label: 'Grand Total (₹)',
+                                        controller: _grandTotalController,
+                                        color: AppColors.teal,
+                                        width: constraints.maxWidth - 4,
+                                        onChanged: (val) {
+                                          setState(() {
+                                            final gt = double.tryParse(val) ?? 0.0;
+                                            _scannedBill!.grandTotal = gt;
+                                          });
+                                        },
+                                      ),
+                                    ],
+                                  );
+                                }
+                                return Row(
+                                  children: [
+                                    _buildEditableSummaryField(
+                                      label: 'Subtotal (₹)',
+                                      controller: _subtotalController,
                                       onChanged: (val) {
                                         setState(() {
-                                          _scannedBill!.isAmountTaxable = val;
-                                          for (var item in _scannedBill!.items) {
-                                            item.netAmount = val ? item.taxableAmount : item.calculatedNet;
-                                          }
+                                          _scannedBill!.printedSubtotal = double.tryParse(val) ?? 0.0;
+                                        });
+                                      },
+                                    ),
+                                    _buildEditableSummaryField(
+                                      label: 'Bill Disc (₹)',
+                                      controller: _printedDiscountController,
+                                      color: Colors.red.shade700,
+                                      onChanged: (val) {
+                                        setState(() {
+                                          final dis = double.tryParse(val) ?? 0.0;
+                                          _scannedBill!.printedDiscount = dis;
+                                          _scannedBill!.billDiscountAmount = dis;
+                                        });
+                                      },
+                                    ),
+                                    _buildEditableSummaryField(
+                                      label: 'Net Taxable (₹)',
+                                      controller: _taxableController,
+                                      onChanged: (val) {
+                                        setState(() {
+                                          _scannedBill!.printedTaxable = double.tryParse(val) ?? 0.0;
+                                        });
+                                      },
+                                    ),
+                                    _buildEditableSummaryField(
+                                      label: 'CGST (₹)',
+                                      controller: _cgstController,
+                                      onChanged: (val) {
+                                        setState(() {
+                                          _scannedBill!.printedCgst = double.tryParse(val) ?? 0.0;
+                                        });
+                                      },
+                                    ),
+                                    _buildEditableSummaryField(
+                                      label: 'SGST (₹)',
+                                      controller: _sgstController,
+                                      onChanged: (val) {
+                                        setState(() {
+                                          _scannedBill!.printedSgst = double.tryParse(val) ?? 0.0;
+                                        });
+                                      },
+                                    ),
+                                    _buildEditableSummaryField(
+                                      label: 'Round Off (₹)',
+                                      controller: _roundOffController,
+                                      color: Colors.orange.shade800,
+                                      onChanged: (val) {
+                                        setState(() {
+                                          _scannedBill!.printedRoundOff = double.tryParse(val) ?? 0.0;
+                                        });
+                                      },
+                                    ),
+                                    _buildEditableSummaryField(
+                                      label: 'Grand Total (₹)',
+                                      controller: _grandTotalController,
+                                      color: AppColors.teal,
+                                      onChanged: (val) {
+                                        setState(() {
+                                          final gt = double.tryParse(val) ?? 0.0;
+                                          _scannedBill!.grandTotal = gt;
                                         });
                                       },
                                     ),
                                   ],
-                                ),
-                              ],
-                            ),
-                            const Divider(),
-                            Row(
-                              children: [
-                                _buildEditableSummaryField(
-                                  label: 'Subtotal (₹)',
-                                  controller: _subtotalController,
-                                  onChanged: (val) {
-                                    setState(() {
-                                      _scannedBill!.printedSubtotal = double.tryParse(val) ?? 0.0;
-                                    });
-                                  },
-                                ),
-                                _buildEditableSummaryField(
-                                  label: 'Bill Disc (₹)',
-                                  controller: _printedDiscountController,
-                                  color: Colors.red.shade700,
-                                  onChanged: (val) {
-                                    setState(() {
-                                      final dis = double.tryParse(val) ?? 0.0;
-                                      _scannedBill!.printedDiscount = dis;
-                                      _scannedBill!.billDiscountAmount = dis;
-                                    });
-                                  },
-                                ),
-                                _buildEditableSummaryField(
-                                  label: 'Net Taxable (₹)',
-                                  controller: _taxableController,
-                                  onChanged: (val) {
-                                    setState(() {
-                                      _scannedBill!.printedTaxable = double.tryParse(val) ?? 0.0;
-                                    });
-                                  },
-                                ),
-                                _buildEditableSummaryField(
-                                  label: 'CGST (₹)',
-                                  controller: _cgstController,
-                                  onChanged: (val) {
-                                    setState(() {
-                                      _scannedBill!.printedCgst = double.tryParse(val) ?? 0.0;
-                                    });
-                                  },
-                                ),
-                                _buildEditableSummaryField(
-                                  label: 'SGST (₹)',
-                                  controller: _sgstController,
-                                  onChanged: (val) {
-                                    setState(() {
-                                      _scannedBill!.printedSgst = double.tryParse(val) ?? 0.0;
-                                    });
-                                  },
-                                ),
-                                _buildEditableSummaryField(
-                                  label: 'Round Off (₹)',
-                                  controller: _roundOffController,
-                                  color: Colors.orange.shade800,
-                                  onChanged: (val) {
-                                    setState(() {
-                                      _scannedBill!.printedRoundOff = double.tryParse(val) ?? 0.0;
-                                    });
-                                  },
-                                ),
-                                _buildEditableSummaryField(
-                                  label: 'Grand Total (₹)',
-                                  controller: _grandTotalController,
-                                  color: AppColors.teal,
-                                  onChanged: (val) {
-                                    setState(() {
-                                      final gt = double.tryParse(val) ?? 0.0;
-                                      _scannedBill!.grandTotal = gt;
-                                    });
-                                  },
-                                ),
-                              ],
+                                );
+                              },
                             ),
                           ],
                         ),
@@ -1167,36 +1371,72 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
               const SizedBox(height: 20),
 
               // Action Buttons: Excel Export & Add to Stock
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _exportToExcel,
-                      icon: const Icon(Icons.table_chart),
-                      label: const Text('Export to Excel (.xlsx)'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.teal,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.all(16),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final isMobile = constraints.maxWidth < 600;
+                  if (isMobile) {
+                    return Column(
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: _exportToExcel,
+                          icon: const Icon(Icons.table_chart),
+                          label: const Text('Export to Excel (.xlsx)'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.teal,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.all(16),
+                            minimumSize: const Size(double.infinity, 48),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        ElevatedButton.icon(
+                          onPressed: _sendToApprovalQueue,
+                          icon: const Icon(Icons.mark_email_read),
+                          label: const Text('📩 Send for Admin Approval'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.emerald,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.all(16),
+                            minimumSize: const Size(double.infinity, 48),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _exportToExcel,
+                          icon: const Icon(Icons.table_chart),
+                          label: const Text('Export to Excel (.xlsx)'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.teal,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.all(16),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _sendToApprovalQueue,
-                      icon: const Icon(Icons.mark_email_read),
-                      label: const Text('📩 Send for Admin Approval'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.emerald,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.all(16),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _sendToApprovalQueue,
+                          icon: const Icon(Icons.mark_email_read),
+                          label: const Text('📩 Send for Admin Approval'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.emerald,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.all(16),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                ],
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 30),
             ],
@@ -1211,26 +1451,30 @@ class _BillScannerScreenState extends State<BillScannerScreen> {
     required TextEditingController controller,
     required ValueChanged<String> onChanged,
     Color? color,
+    double? width,
   }) {
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 2.0),
-        child: TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color ?? AppColors.slate800),
-          decoration: InputDecoration(
-            labelText: label,
-            labelStyle: TextStyle(fontSize: 10, color: color ?? AppColors.slate800, fontWeight: FontWeight.bold),
-            isDense: true,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-            filled: true,
-            fillColor: Colors.white,
-          ),
-          onChanged: onChanged,
+    final fieldWidget = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2.0, vertical: 3.0),
+      child: TextField(
+        controller: controller,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color ?? AppColors.slate800),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: TextStyle(fontSize: 10, color: color ?? AppColors.slate800, fontWeight: FontWeight.bold),
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+          filled: true,
+          fillColor: Colors.white,
         ),
+        onChanged: onChanged,
       ),
     );
+
+    if (width != null) {
+      return SizedBox(width: width, child: fieldWidget);
+    }
+    return Expanded(child: fieldWidget);
   }
 }

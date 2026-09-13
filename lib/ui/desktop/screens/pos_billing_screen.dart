@@ -14,6 +14,7 @@ import '../../common/widgets/custom_card.dart';
 import '../../common/widgets/receipt_preview.dart';
 import '../../common/widgets/loading_overlay.dart';
 import '../../../data/services/pdf_service.dart';
+import '../../../data/services/firebase_service.dart';
 
 
 class PosBillingScreen extends StatefulWidget {
@@ -822,6 +823,22 @@ class _PosBillingScreenState extends State<PosBillingScreen> {
         ),
       );
       return;
+    }
+
+    // If this medicine was not found in Firestore inventory (_matchedInventoryItem == null),
+    // register it so it appears in Medicine Rate Lookup with the entered rate info.
+    if (_matchedInventoryItem == null && name.isNotEmpty && mrp > 0) {
+      final newInventoryRecord = InventoryModel(
+        medicineName: name,
+        batchNumber: batch,
+        expiryDate: expiry,
+        quantity: 0, // quantity 0 — sirf rate record ke liye
+        mrp: mrp,
+        salePrice: salePrice,
+        purchasePrice: 0.0,
+        supplierName: '',
+      );
+      FirebaseService.instance.addInventoryItem(newInventoryRecord).catchError((_) => '');
     }
 
     // Reset input fields

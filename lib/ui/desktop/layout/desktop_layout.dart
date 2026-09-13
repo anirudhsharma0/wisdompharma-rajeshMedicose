@@ -12,6 +12,7 @@ import '../screens/reports_screen.dart';
 import '../screens/vouchers_screen.dart';
 import '../screens/placeholder_screens.dart';
 import '../screens/parties_screen.dart';
+import '../screens/medicine_rate_lookup_screen.dart';
 import '../../common/screens/bill_scanner_screen.dart';
 import '../../common/screens/pending_bills_screen.dart';
 
@@ -319,6 +320,7 @@ class _DesktopLayoutState extends State<DesktopLayout> {
       const SettingsScreen(),
       const BillScannerScreen(),
       const PendingBillsScreen(),
+      const MedicineRateLookupScreen(),
     ];
 
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -472,9 +474,13 @@ class _DesktopLayoutState extends State<DesktopLayout> {
                                     children: const [
                                       Icon(Icons.search, size: 16, color: Colors.white70),
                                       SizedBox(width: 8),
-                                      Text(
-                                        'Open Anything (Ctrl+F)',
-                                        style: TextStyle(color: Colors.white60, fontSize: 11.5, fontWeight: FontWeight.w500),
+                                      Expanded(
+                                        child: Text(
+                                          'Open Anything (Ctrl+F)',
+                                          style: TextStyle(color: Colors.white60, fontSize: 11.5, fontWeight: FontWeight.w500),
+                                          overflow: TextOverflow.ellipsis,
+                                          maxLines: 1,
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -526,6 +532,7 @@ class _DesktopLayoutState extends State<DesktopLayout> {
                                 children: [
                                   _buildSubTile('Stock Inventory', 3),
                                   _buildSubTile('Medicines Master DB', 6),
+                                  _buildSubTile('Medicine Rate Lookup', 15),
                                   _buildSubTile('Expiry Management', 7),
                                 ],
                               ),

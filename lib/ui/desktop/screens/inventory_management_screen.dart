@@ -332,7 +332,11 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
                                                   ),
                                                   IconButton(
                                                     icon: const Icon(Icons.delete, color: AppColors.error, size: 16),
-                                                    onPressed: () => dashProvider.deleteStock(item.id!),
+                                                    onPressed: () {
+                                                      if (item.id != null) {
+                                                        dashProvider.deleteStock(item.id!);
+                                                      }
+                                                    },
                                                   ),
                                                 ],
                                               ),

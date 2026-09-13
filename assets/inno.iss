@@ -3,7 +3,7 @@
 ; Non-commercial use only
 
 #define MyAppName "WisdomPharma"
-#define MyAppVersion "5.2"
+#define MyAppVersion "5.5"
 #define MyAppPublisher "Wisdomcoresolutions"
 #define MyAppURL "https://www.Wisdomcoresolutions.store/"
 #define MyAppExeName "medical_store.exe"
@@ -14,7 +14,7 @@
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
 ; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
-AppId={{4F9526F5-18B3-4ECA-93BA-DA2EB1C233E1}
+AppId={{53988CC0-5530-486E-999C-10D7F97C3482}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 ;AppVerName={#MyAppName} {#MyAppVersion}
@@ -38,11 +38,10 @@ ChangesAssociations=yes
 DisableProgramGroupPage=yes
 ; Uncomment the following line to run in non administrative install mode (install for current user only).
 ;PrivilegesRequired=lowest
-OutputDir=build\installer
-OutputBaseFilename=wisdompharma-setup
-;SetupIconFile=F:\Project\Medical\assets\icon\app_icon.ico
-Compression=none
-SolidCompression=no
+OutputDir=C:\Users\Anirudh\Desktop
+OutputBaseFilename=WisdomPharma-setup
+SetupIconFile=F:\Project\Medical\assets\icon\app_icon.ico
+SolidCompression=yes
 WizardStyle=modern dynamic
 
 [Languages]
